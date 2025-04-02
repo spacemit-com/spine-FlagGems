@@ -10,7 +10,7 @@ from .. import runtime
 from ..runtime import torch_device_fn
 from .code_cache import config_cache_dir
 
-DEVICE_COUNT = runtime.device.device_count
+# DEVICE_COUNT = runtime.device.device_count
 ATTRS = {
     (2, 2): 5,
     (2, 3): 5,
@@ -88,7 +88,8 @@ class LibTuner(triton.runtime.Autotuner):
             cfg_ls = [item.split(": ") for item in config_str.split(", ")]
             kwargs = {}
             numargs = {}
-            attrs = ATTRS[(major_version, minor_version)]
+            # attrs = ATTRS[(major_version, minor_version)]
+            attrs = -5 if major_version == 2 else -4
             for k, v in cfg_ls[:-attrs]:
                 kwargs[k] = eval(v)
             for k, v in cfg_ls[-attrs:]:
@@ -163,7 +164,8 @@ class LibEntry(triton.KernelInterface):
         self.fn = fn
         self.arg_names = fn.arg_names
         self.divisibility = 16
-        self.kernel_cache = tuple(dict() for _ in range(DEVICE_COUNT))
+        # self.kernel_cache = tuple(dict() for _ in range(DEVICE_COUNT))
+        self.kernel_cache = {} 
 
         while not isinstance(fn, triton.runtime.JITFunction):
             fn = fn.fn
@@ -237,8 +239,9 @@ class LibEntry(triton.KernelInterface):
                 k_args.append(val)
 
         entry_key = self.key(spec_args, dns_args, const_args)
-        device = torch_device_fn.current_device()
-        cache = self.kernel_cache[device]
+        # device = torch_device_fn.current_device()
+        # cache = self.kernel_cache[device]
+        cache = self.kernel_cache
         while entry_key not in cache:
             # NOTE: we serialize the first run of a jit function regardless of which device to run on
             # because Triton runtime is currently not threadsafe.
