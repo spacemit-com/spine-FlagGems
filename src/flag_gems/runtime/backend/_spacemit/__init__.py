@@ -6,7 +6,7 @@ global specific_ops, unused_ops
 specific_ops = None
 unused_ops = None
 vendor_info = VendorInfoBase(
-    vendor_name="spacemit", device_name="cuda", device_query_cmd="lscpu"
+    vendor_name="spacemit", device_name="cpu", device_query_cmd="lscpu"
 )
 
 
@@ -17,6 +17,9 @@ def OpLoader():
 
         specific_ops = ops.get_specific_ops()
         unused_ops = ops.get_unused_ops()
+
+
+CUSTOMIZED_UNUSED_OPS = ()
 
 
 __all__ = ["HEURISTICS_CONFIGS", "vendor_info", "OpLoader"]

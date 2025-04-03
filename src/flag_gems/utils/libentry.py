@@ -10,7 +10,7 @@ from .. import runtime
 from ..runtime import torch_device_fn
 from .code_cache import config_cache_dir
 
-# DEVICE_COUNT = runtime.device.device_count
+DEVICE_COUNT = runtime.device.device_count
 ATTRS = {
     (2, 2): 5,
     (2, 3): 5,
@@ -165,7 +165,7 @@ class LibEntry(triton.KernelInterface):
         self.arg_names = fn.arg_names
         self.divisibility = 16
         # self.kernel_cache = tuple(dict() for _ in range(DEVICE_COUNT))
-        self.kernel_cache = {} 
+        self.kernel_cache = {}
 
         while not isinstance(fn, triton.runtime.JITFunction):
             fn = fn.fn
