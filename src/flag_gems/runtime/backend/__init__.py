@@ -97,6 +97,11 @@ import torch
 fn = torch.{device_name}
 """
     torch_device_object = get_codegen_result(code, "fn")
+
+    if vendor_name == "spacemit":
+        backends_module = importlib.import_module("flag_gems.runtime.backend._spacemit")
+        setattr(torch_device_object, '_DeviceGuard', getattr(backends_module, '_DeviceGuard'))
+
     return torch_device_object
 
 
