@@ -33,6 +33,17 @@ class _DeviceGuard:
         self.idx = self.prev_idx
         return False
 
+class _DeviceWrapper:
+    def __init__(self, device: Any):
+        ...
+
+    def __enter__(self):
+        ...
+
+    def __exit__(self, type: Any, value: Any, traceback: Any):
+        ...
+        return False
+
 
 CUSTOMIZED_UNUSED_OPS = ()
 

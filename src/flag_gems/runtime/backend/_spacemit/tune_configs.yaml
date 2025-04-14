@@ -26,15 +26,15 @@ attention:
   - 3
 bmm:
 - META:
-    BLOCK_M: 16
-    BLOCK_N: 32
-    BLOCK_K: 512
-    SPLIT_K: 1
+    TILE_M: 16
+    TILE_N: 32
+    TILE_K: 512
+    GROUP_M: 1
 - META:
-    BLOCK_M: 16
-    BLOCK_N: 16
-    BLOCK_K: 1024
-    SPLIT_K: 1
+    TILE_M: 16
+    TILE_N: 16
+    TILE_K: 1024
+    GROUP_M: 1
 argmax:
 - META:
     BLOCK_M: 8
