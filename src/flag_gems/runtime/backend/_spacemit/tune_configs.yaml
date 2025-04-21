@@ -73,12 +73,10 @@ mm:
     BLOCK_M: 16
     BLOCK_N: 32
     BLOCK_K: 512
-    SPLIT_K: 1
 - META:
     BLOCK_M: 16
     BLOCK_N: 16
     BLOCK_K: 1024
-    SPLIT_K: 1
 softmax_non_inner:
 - META:
     TILE_K: 32
