@@ -11,13 +11,15 @@ exp = tl_extra_shim.exp
 pow = tl_extra_shim.pow
 tanh = tl_extra_shim.tanh
 geluTanh = tl_extra_shim.geluTanh
+geluNone = tl_extra_shim.geluNone
 
 
 @pointwise_dynamic(promotion_methods=[(0, "DEFAULT")])
 @triton.jit
 def gelu_none(x):
-    scale: tl.constexpr = 0.7071067811  # 1 / math.sqrt(2)
-    output = 0.5 * x * (1 + erf(x * scale))
+    # scale: tl.constexpr = 0.7071067811  # 1 / math.sqrt(2)
+    # output = 0.5 * x * (1 + erf(x * scale))
+    output = geluNone(x.to(tl.float32))
     return output
 
 
