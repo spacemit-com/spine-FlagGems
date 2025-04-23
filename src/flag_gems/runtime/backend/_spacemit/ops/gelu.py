@@ -10,6 +10,7 @@ erf = tl_extra_shim.erf
 exp = tl_extra_shim.exp
 pow = tl_extra_shim.pow
 tanh = tl_extra_shim.tanh
+geluTanh = tl_extra_shim.geluTanh
 
 
 @pointwise_dynamic(promotion_methods=[(0, "DEFAULT")])
@@ -24,7 +25,8 @@ def gelu_none(x):
 @triton.jit
 def gelu_tanh(x):
     output = (
-        0.5 * x * (1 + tanh(x * 0.79788456 * (1 + 0.044715 * pow(x.to(tl.float32), 2))))
+        # 0.5 * x * (1 + tanh(x * 0.79788456 * (1 + 0.044715 * pow(x.to(tl.float32), 2))))
+        geluTanh(x.to(tl.float32))
     )
     return output
 
