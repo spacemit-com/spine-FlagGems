@@ -346,8 +346,6 @@ mean:
   param_map:
     META:
       BLOCK_M: block_m
-      BLOCK_N: 1024
-    num_warps: 4
   block_m:
   - 1
   - 2

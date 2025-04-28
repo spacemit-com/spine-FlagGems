@@ -10,8 +10,8 @@ erf = tl_extra_shim.erf
 exp = tl_extra_shim.exp
 pow = tl_extra_shim.pow
 tanh = tl_extra_shim.tanh
-geluTanh = tl_extra_shim.geluTanh
-geluNone = tl_extra_shim.geluNone
+geluTanh = tl_extra_shim.gelu_tanh
+geluNone = tl_extra_shim.gelu_none
 
 
 @pointwise_dynamic(promotion_methods=[(0, "DEFAULT")])
