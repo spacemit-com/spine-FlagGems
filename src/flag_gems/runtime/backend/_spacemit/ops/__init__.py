@@ -3,5 +3,6 @@ from .mm import mm
 from .silu import silu
 from .mean import mean_dim
 from .rsqrt import rsqrt
+from .layernorm import layer_norm
 
-__all__ = ["gelu", "mm", "silu", "mean_dim", "rsqrt"]
+__all__ = ["gelu", "mm", "silu", "mean_dim", "rsqrt", "layer_norm"]
