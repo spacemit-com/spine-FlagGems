@@ -345,12 +345,10 @@ mean:
 - gen: true
   param_map:
     META:
-      BLOCK_M: block_m
-  block_m:
-  - 1
-  - 2
-  - 4
-  - 8
+      TILE_N: tile_n
+  tile_n:
+  - 256
+  - 512
 
 instancenorm:
 - gen: true
