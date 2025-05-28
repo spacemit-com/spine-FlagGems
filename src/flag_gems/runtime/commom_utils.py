@@ -14,21 +14,13 @@ class vendors(Enum):
     KUNLUNXIN = 5
     HYGON = 6
     AMD = 7
-    SPACEMIT = 8
+    AIPU = 8
+    ASCEND = 9
+    SPACEMIT = 100
 
     @classmethod
-    def get_all_vendors(cls):
-        return [member.name for member in cls]
-
-
-vendors_map = {
-    "nvidia": vendors.NVIDIA,
-    "cambricon": vendors.CAMBRICON,
-    "iluvatar": vendors.ILUVATAR,
-    "kunlunxin": vendors.KUNLUNXIN,
-    "mthreads": vendors.MTHREADS,
-    "hygon": vendors.HYGON,
-    "metax": vendors.METAX,
-    "AMD": vendors.AMD,
-    "spacemit": vendors.SPACEMIT,
-}
+    def get_all_vendors(cls) -> dict:
+        vendorDict = {}
+        for member in cls:
+            vendorDict[member.name.lower()] = member
+        return vendorDict
