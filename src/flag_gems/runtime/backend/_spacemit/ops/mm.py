@@ -14,12 +14,12 @@ from flag_gems.utils import libentry, libtuner
     configs=runtime.get_tuned_config("mm"),
     key=["M", "N", "K"],
 )
-@triton.heuristics(runtime.get_heuristic_config("mm"))
+
 @triton.jit
 def mm_kernel(
-    A,
-    B,
-    C,
+    a_ptr,
+    b_ptr,
+    c_ptr,
     M,
     N,
     K,
@@ -30,73 +30,59 @@ def mm_kernel(
     stride_cm,
     stride_cn,
     dot_out_dtype: tl.constexpr,
-    BLOCK_M: tl.constexpr,
-    BLOCK_N: tl.constexpr,
-    BLOCK_K: tl.constexpr,
-    GROUP_M: tl.constexpr,
+    BLOCK_SIZE_M: tl.constexpr,
+    BLOCK_SIZE_N: tl.constexpr,
+    BLOCK_SIZE_K: tl.constexpr,
     EVEN_K: tl.constexpr,
 ):
-    # matrix multiplication
-    pid = tl.program_id(0)
-    pid_z = tl.program_id(1)
-    grid_m = tl.cdiv(M, BLOCK_M)
-    grid_n = tl.cdiv(N, BLOCK_N)
-    # re-order program ID for better L2 performance
-    width = GROUP_M * grid_n
-    group_id = pid // width
-    group_size = min(grid_m - group_id * GROUP_M, GROUP_M)
-    pid_m = group_id * GROUP_M + (pid % group_size)
-    pid_n = (pid % width) // (group_size)
-    # do matrix multiplication
-    rm = pid_m * BLOCK_M + tl.arange(0, BLOCK_M)
-    rn = pid_n * BLOCK_N + tl.arange(0, BLOCK_N)
-    ram = tl.max_contiguous(tl.multiple_of(rm % M, BLOCK_M), BLOCK_M)
-    rbn = tl.max_contiguous(tl.multiple_of(rn % N, BLOCK_N), BLOCK_N)
-    rk = pid_z * BLOCK_K + tl.arange(0, BLOCK_K)
-    # pointers
-    A = A + (ram[:, None] * stride_am + rk[None, :] * stride_ak)
-    B = B + (rk[:, None] * stride_bk + rbn[None, :] * stride_bn)
-    acc = tl.zeros((BLOCK_M, BLOCK_N), dtype=dot_out_dtype)
-    for k in range(0, tl.cdiv(K, BLOCK_K)):
-        _0 = tl.zeros((1, 1), dtype=C.dtype.element_ty)
+    pid_m = tl.program_id(0)
+    pid_n = tl.program_id(1)
+
+    a_block_ptr = tl.make_block_ptr(
+            base=a_ptr,
+            shape=[M, K],
+            strides=[stride_am, stride_ak],
+            offsets=[pid_m * BLOCK_SIZE_M, 0],
+            block_shape=[BLOCK_SIZE_M, BLOCK_SIZE_K],
+            order=[1, 0]
+        )
+
+    b_block_ptr = tl.make_block_ptr(
+            base=b_ptr,
+            shape=[K, N],
+            strides=[stride_bk, stride_bn],
+            offsets=[0, pid_n * BLOCK_SIZE_N],
+            block_shape=[BLOCK_SIZE_K, BLOCK_SIZE_N],
+            order=[1, 0],
+        )
+
+    accumulator = tl.zeros((BLOCK_SIZE_M, BLOCK_SIZE_N), dtype=tl.float32)
+
+    for k in range(0, tl.cdiv(K, BLOCK_SIZE_K)):
+
         if EVEN_K:
-            a = tl.load(A, mask=(rm < M)[:, None], other=_0)
-            b = tl.load(B, mask=(rn < N)[None, :], other=_0)
+            a = tl.load(a_block_ptr, boundary_check=(0,))
+            b = tl.load(b_block_ptr, boundary_check=(1,))
         else:
-            k_remaining = K - k * BLOCK_K
-            a = tl.load(A, mask=rk[None, :] < k_remaining, other=_0)
-            b = tl.load(B, mask=rk[:, None] < k_remaining, other=_0)
-        if a.dtype != b.dtype:
-            a = a.to(C.dtype.element_ty)
-            b = b.to(C.dtype.element_ty)
-        acc += tl.dot(a, b, out_dtype=dot_out_dtype, allow_tf32=False)
-        A += BLOCK_K * stride_ak
-        B += BLOCK_K * stride_bk
-    acc = acc.to(C.dtype.element_ty)
-    # rematerialize rm and rn to save registers
-    rm = pid_m * BLOCK_M + tl.arange(0, BLOCK_M)
-    rn = pid_n * BLOCK_N + tl.arange(0, BLOCK_N)
-    C = C + (rm[:, None] * stride_cm + rn[None, :] * stride_cn)
-    mask = (rm < M)[:, None] & (rn < N)[None, :]
-    # handles write-back with reduction-splitting
-    tl.store(C, acc, mask=mask)
+            a = tl.load(a_block_ptr, boundary_check=(0,1))
+            b = tl.load(b_block_ptr, boundary_check=(0,1))
+        accumulator += tl.dot(a, b, allow_tf32=False)
 
+        a_block_ptr = tl.advance(a_block_ptr, (0, BLOCK_SIZE_K))
+        b_block_ptr = tl.advance(b_block_ptr, (BLOCK_SIZE_K, 0))
 
-_ordered_datatypes = [torch.float16, torch.bfloat16, torch.float32]
+    c = accumulator.to(dot_out_dtype)
 
+    c_block_ptr = tl.make_block_ptr(
+        base=c_ptr,
+        shape=[M, N],
+        strides=[stride_cm, stride_cn],
+        offsets=[pid_m * BLOCK_SIZE_M, pid_n * BLOCK_SIZE_N],
+        block_shape=[BLOCK_SIZE_M, BLOCK_SIZE_N],
+        order=[1, 0],
+    )
 
-def get_higher_dtype(a, b):
-    if a is b:
-        return a
-
-    assert a in _ordered_datatypes
-    assert b in _ordered_datatypes
-
-    for d in _ordered_datatypes:
-        if a is d:
-            return b
-        if b is d:
-            return a
+    tl.store(c_block_ptr, c, boundary_check=(0, 1))
 
 
 def mm(a, b):
@@ -112,28 +98,27 @@ def mm(a, b):
     M, K = a.shape
     _, N = b.shape
     # allocates output
-    c_dtype = get_higher_dtype(a.dtype, b.dtype)
-    c = torch.empty((M, N), device=device, dtype=c_dtype)
+    c = torch.empty((M, N), device=device, dtype=a.dtype)
     dot_out_dtype = tl.float32
     # launch kernel
     grid = lambda META: (
-        triton.cdiv(M, META["BLOCK_M"]) * triton.cdiv(N, META["BLOCK_N"]),
+        triton.cdiv(M, META["BLOCK_SIZE_M"]),
+        triton.cdiv(N, META["BLOCK_SIZE_N"]),
     )
-    # with torch_device_fn.device(a.device):
-    mm_kernel[grid](
-        a,
-        b,
-        c,
-        M,
-        N,
-        K,
-        a.stride(0),
-        a.stride(1),
-        b.stride(0),
-        b.stride(1),
-        c.stride(0),
-        c.stride(1),
-        dot_out_dtype=dot_out_dtype,
-        GROUP_M=8,
-    )
+    with torch.device(a.device):
+        mm_kernel[grid](
+            a,
+            b,
+            c,
+            M,
+            N,
+            K,
+            a.stride(0),
+            a.stride(1),
+            b.stride(0),
+            b.stride(1),
+            c.stride(0),
+            c.stride(1),
+            dot_out_dtype=dot_out_dtype,
+        )
     return c

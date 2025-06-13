@@ -73,19 +73,22 @@ def mean_dim_kernel(X, Mean, M, N, TILE_N: tl.constexpr):
 
     num_pid_n = tl.cdiv(N, TILE_N)
 
-    for off_n in range(0, num_pid_n):
-        x_ptr_desc = tl.make_block_ptr(
+    x_ptr_desc = tl.make_block_ptr(
             base=X,
             shape=[N],
             strides=[1],
-            offsets=[off_n * TILE_N],
+            offsets=[0],
             block_shape=[TILE_N],
             order=[0],
         )
 
+    for off_n in range(0, num_pid_n):
+
         a = tl.load(x_ptr_desc, boundary_check=[0],)
 
         _mean += tl.sum(a)
+
+        x_ptr_desc = tl.advance(x_ptr_desc, [TILE_N])
 
     mean = _mean / N
 

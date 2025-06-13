@@ -36,19 +36,20 @@ def layer_norm_common_kernel(
     mean = 0.
     var = 0.
     num_pid_n = tl.cdiv(N, TILE_N)
-    for off_n in range(0, num_pid_n):
-        x_ptr_desc = tl.make_block_ptr(
+    x_ptr_desc = tl.make_block_ptr(
             base=X,
             shape=[N],
             strides=[1],
-            offsets=[off_n * TILE_N],
+            offsets=[0],
             block_shape=[TILE_N],
             order=[0],
         )
-
+    for off_n in range(0, num_pid_n):
         a = tl.load(x_ptr_desc, boundary_check=[0],)
         mean += tl.sum(a)
         var += tl.sum(pow(a, 2))
+
+        x_ptr_desc = tl.advance(x_ptr_desc, [TILE_N])
 
     mean = mean / N
     var = var / N
@@ -57,55 +58,63 @@ def layer_norm_common_kernel(
     tl.store(Mean + row, mean)
     tl.store(Rstd + row, rstd)
 
+    x_ptr_desc = tl.make_block_ptr(
+        base=X,
+        shape=[N],
+        strides=[1],
+        offsets=[0],
+        block_shape=[TILE_N],
+        order=[0],
+    )
+
+    weight_ptr_desc = tl.make_block_ptr(
+        base=W,
+        shape=[N],
+        strides=[1],
+        offsets=[0],
+        block_shape=[TILE_N],
+        order=[0],
+    )
+
+    bias_ptr_desc = tl.make_block_ptr(
+        base=B,
+        shape=[N],
+        strides=[1],
+        offsets=[0],
+        block_shape=[TILE_N],
+        order=[0],
+    )
+    y_ptr_desc = tl.make_block_ptr(
+        base=Y,
+        shape=[N],
+        strides=[1],
+        offsets=[0],
+        block_shape=[TILE_N],
+        order=[0],
+    )
+
     for off_n in range(0, num_pid_n):
-        x_ptr_desc = tl.make_block_ptr(
-            base=X,
-            shape=[N],
-            strides=[1],
-            offsets=[off_n * TILE_N],
-            block_shape=[TILE_N],
-            order=[0],
-        )
 
         a = tl.load(x_ptr_desc, boundary_check=[0],)
         x_hat = (a - mean) * rstd
 
+        x_ptr_desc = tl.advance(x_ptr_desc, [TILE_N])
+
         if W is None:
             w = 1
         else:
-            weight_ptr_desc = tl.make_block_ptr(
-                base=W,
-                shape=[N],
-                strides=[1],
-                offsets=[off_n * TILE_N],
-                block_shape=[TILE_N],
-                order=[0],
-            )
             w = tl.load(weight_ptr_desc, boundary_check=[0],)
+            weight_ptr_desc = tl.advance(weight_ptr_desc, [TILE_N])
 
         if B is None:
             b = 0
         else:
-            bias_ptr_desc = tl.make_block_ptr(
-                base=B,
-                shape=[N],
-                strides=[1],
-                offsets=[off_n * TILE_N],
-                block_shape=[TILE_N],
-                order=[0],
-            )
             b = tl.load(bias_ptr_desc, boundary_check=[0],)
+            bias_ptr_desc = tl.advance(bias_ptr_desc, [TILE_N])
 
         y = x_hat * w + b
-        y_ptr_desc = tl.make_block_ptr(
-                base=Y,
-                shape=[N],
-                strides=[1],
-                offsets=[off_n * TILE_N],
-                block_shape=[TILE_N],
-                order=[0],
-            )
         tl.store(y_ptr_desc, y, boundary_check=[0],)
+        y_ptr_desc = tl.advance(y_ptr_desc, [TILE_N])
 
 @libentry()
 @triton.autotune(
@@ -252,7 +261,7 @@ class LayerNorm(torch.autograd.Function):
             ctx.save_for_backward(x, weight, bias, mean, rstd)
             ctx.M = M
             ctx.N = N
-        return y, mean, rstd
+        return y
 
     @staticmethod
     def backward(ctx, out_grad, mean_grad, rstd_grad):
