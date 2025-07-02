@@ -20,8 +20,8 @@ ATTRS = {
     (2, 3): 5,
     (3, 0): 4,
     (3, 1): 4,
-    (3, 2): 8,
-    (3, 3): 8,
+    (3, 2): 4,
+    (3, 3): 4,
 }
 version = triton.__version__.split(".")
 major_version, minor_version = eval(version[0]), eval(version[1])
