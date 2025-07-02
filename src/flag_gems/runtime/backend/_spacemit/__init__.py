@@ -32,7 +32,10 @@ class _DeviceWrapper:
         return False
 
 
-CUSTOMIZED_UNUSED_OPS = ()
+CUSTOMIZED_UNUSED_OPS = (
+    "contiguous",
+    "fill_scalar_",
+)
 
 
 __all__ = ["*"]

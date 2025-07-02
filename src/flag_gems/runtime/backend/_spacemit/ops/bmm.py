@@ -18,11 +18,15 @@ logger = logging.getLogger(__name__)
     key=["M", "N", "K"],
     strategy=["log", "log", "log"],
 )
-
 @triton.heuristics(runtime.get_heuristic_config("bmm"))
 @triton.jit
 def bmm_kernel(
-    A, B, O, M, N, K,  # Matrices and dimensions
+    A,
+    B,
+    O,
+    M,
+    N,
+    K,  # Matrices and dimensions
     stride_ab,
     stride_am,
     stride_ak,
@@ -90,26 +94,19 @@ def bmm_kernel(
     acc = tl.zeros((TILE_M, TILE_N), dtype=tl.float32)
 
     # Loop over K dimension in tiles
-    for k in range(0, K, TILE_K):
-        # Load tiles of A and B using tl.load
-        if DIVISIBLE_M:
-            a_tile = tl.load(a_ptr, boundary_check=(0,))
-            b_tile = tl.load(b_ptr, boundary_check=(0, 1))
-        if DIVISIBLE_N:
-            a_tile = tl.load(a_ptr, boundary_check=(0, 1))
-            b_tile = tl.load(b_ptr, boundary_check=(1,))
-        if DIVISIBLE_K:
-            a_tile = tl.load(a_ptr, boundary_check=(0,))
-            b_tile = tl.load(b_ptr, boundary_check=(1,))
-        else:
+    if DIVISIBLE_K:
+        for k in range(0, K, TILE_K):
             a_tile = tl.load(a_ptr, boundary_check=(0, 1))
             b_tile = tl.load(b_ptr, boundary_check=(0, 1))
 
-        # Compute partial product
+            acc += tl.dot(a_tile, b_tile)
+
+            a_ptr = tl.advance(a_ptr, [0, TILE_K])
+            b_ptr = tl.advance(b_ptr, [TILE_K, 0])
+    else:
+        a_tile = tl.load(a_ptr, boundary_check=(0, 1))
+        b_tile = tl.load(b_ptr, boundary_check=(0, 1))
         acc += tl.dot(a_tile, b_tile)
-
-        a_ptr = tl.advance(a_ptr, [0, TILE_K])
-        b_ptr = tl.advance(b_ptr, [TILE_K, 0])
 
     c = acc.to(dot_out_dtype)
 
@@ -150,5 +147,6 @@ def bmm(A, B):
             out.stride(0),
             out.stride(1),
             out.stride(2),
-            dot_out_dtype=dot_out_dtype,)
+            dot_out_dtype=dot_out_dtype,
+        )
     return out

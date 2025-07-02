@@ -14,7 +14,6 @@ from flag_gems.utils import libentry, libtuner
     configs=runtime.get_tuned_config("mm"),
     key=["M", "N", "K"],
 )
-
 @triton.jit
 def mm_kernel(
     a_ptr,
@@ -39,37 +38,36 @@ def mm_kernel(
     pid_n = tl.program_id(1)
 
     a_block_ptr = tl.make_block_ptr(
-            base=a_ptr,
-            shape=[M, K],
-            strides=[stride_am, stride_ak],
-            offsets=[pid_m * BLOCK_SIZE_M, 0],
-            block_shape=[BLOCK_SIZE_M, BLOCK_SIZE_K],
-            order=[1, 0]
-        )
+        base=a_ptr,
+        shape=[M, K],
+        strides=[stride_am, stride_ak],
+        offsets=[pid_m * BLOCK_SIZE_M, 0],
+        block_shape=[BLOCK_SIZE_M, BLOCK_SIZE_K],
+        order=[1, 0],
+    )
 
     b_block_ptr = tl.make_block_ptr(
-            base=b_ptr,
-            shape=[K, N],
-            strides=[stride_bk, stride_bn],
-            offsets=[0, pid_n * BLOCK_SIZE_N],
-            block_shape=[BLOCK_SIZE_K, BLOCK_SIZE_N],
-            order=[1, 0],
-        )
+        base=b_ptr,
+        shape=[K, N],
+        strides=[stride_bk, stride_bn],
+        offsets=[0, pid_n * BLOCK_SIZE_N],
+        block_shape=[BLOCK_SIZE_K, BLOCK_SIZE_N],
+        order=[1, 0],
+    )
 
     accumulator = tl.zeros((BLOCK_SIZE_M, BLOCK_SIZE_N), dtype=tl.float32)
 
-    for k in range(0, tl.cdiv(K, BLOCK_SIZE_K)):
-
-        if EVEN_K:
-            a = tl.load(a_block_ptr, boundary_check=(0,))
-            b = tl.load(b_block_ptr, boundary_check=(1,))
-        else:
-            a = tl.load(a_block_ptr, boundary_check=(0,1))
-            b = tl.load(b_block_ptr, boundary_check=(0,1))
+    if EVEN_K:
+        a = tl.load(a_block_ptr, boundary_check=(0, 1))
+        b = tl.load(b_block_ptr, boundary_check=(0, 1))
         accumulator += tl.dot(a, b, allow_tf32=False)
-
-        a_block_ptr = tl.advance(a_block_ptr, (0, BLOCK_SIZE_K))
-        b_block_ptr = tl.advance(b_block_ptr, (BLOCK_SIZE_K, 0))
+    else:
+        for k in range(0, tl.cdiv(K, BLOCK_SIZE_K)):
+            a = tl.load(a_block_ptr, boundary_check=(0, 1))
+            b = tl.load(b_block_ptr, boundary_check=(0, 1))
+            accumulator += tl.dot(a, b, allow_tf32=False)
+            a_block_ptr = tl.advance(a_block_ptr, (0, BLOCK_SIZE_K))
+            b_block_ptr = tl.advance(b_block_ptr, (BLOCK_SIZE_K, 0))
 
     c = accumulator.to(dot_out_dtype)
 
