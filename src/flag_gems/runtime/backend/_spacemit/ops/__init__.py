@@ -6,5 +6,6 @@ from .rsqrt import rsqrt
 from .layernorm import layer_norm
 from .addmm import addmm
 from .bmm import bmm
+from .conv2d import conv2d
 
-__all__ = ["gelu", "mm", "silu", "mean_dim", "rsqrt", "layer_norm", "addmm", "bmm"]
+__all__ = ["gelu", "mm", "silu", "mean_dim", "rsqrt", "layer_norm", "addmm", "bmm", "conv2d"]
