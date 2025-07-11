@@ -115,3 +115,6 @@ def mean_dim(x, dim, keepdim=False, *, dtype=None):
     if not keepdim:
         out = out.squeeze(dim)
     return out
+
+def global_avg_pool(x, _output_size):
+    pass

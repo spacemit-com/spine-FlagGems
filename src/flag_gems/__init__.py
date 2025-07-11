@@ -40,6 +40,8 @@ def enable(
     global current_work_registrar
     current_work_registrar = registrar(
         (
+            ("native_convolution", conv2d, Autograd.disable),
+            ("mkldnn_convolution", conv2d, Autograd.disable),
             ("abs", abs, Autograd.disable),
             ("abs_", abs_, Autograd.disable),
             ("add.Tensor", add, Autograd.disable),
@@ -66,6 +68,7 @@ def enable(
             ("bmm", bmm, Autograd.disable),
             ("clamp", clamp, Autograd.disable),
             ("clamp_", clamp_, Autograd.disable),
+            ("clamp_min_", clamp_min_, Autograd.disable),
             ("clamp.Tensor", clamp_tensor, Autograd.disable),
             ("clamp_.Tensor", clamp_tensor_, Autograd.disable),
             ("cos", cos, Autograd.disable),
@@ -318,6 +321,8 @@ def enable(
             ("vdot", vdot, Autograd.disable),
             ("mse_loss", mse_loss, Autograd.disable),
             ("to.dtype", to_dtype, Autograd.disable),
+            ("adaptive_avg_pool2d", global_avg_pool, Autograd.disable),
+            ("max_pool2d", maxpool2d, Autograd.disable),
         ),
         user_unused_ops_list=[] if unused is None else unused,
         lib=lib,

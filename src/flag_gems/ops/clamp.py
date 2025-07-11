@@ -92,3 +92,7 @@ def clamp_(A, mini=None, maxi=None):
         return clamp_func_min(A, mini, out0=A)
     else:
         return clamp_func(A, mini, maxi, out0=A)
+
+def clamp_min_(A, mini=None):
+    logger.debug("GEMS CLAMP_MIN_")
+    return clamp_func_min(A, mini, out0=A)

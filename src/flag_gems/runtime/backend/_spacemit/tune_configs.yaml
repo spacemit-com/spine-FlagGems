@@ -27,14 +27,10 @@ attention:
 bmm:
 - META:
     TILE_M: 16
-    TILE_N: 32
-    TILE_K: 512
-    GROUP_M: 1
-- META:
-    TILE_M: 16
     TILE_N: 16
-    TILE_K: 1024
+    TILE_K: 8192
     GROUP_M: 1
+    DIVISIBLE_K: 0
 argmax:
 - META:
     BLOCK_M: 8
@@ -71,13 +67,8 @@ log_softmax:
 mm:
 - META:
     BLOCK_SIZE_M: 16
-    BLOCK_SIZE_N: 32
-    BLOCK_SIZE_K: 512
-    EVEN_K: 1
-- META:
-    BLOCK_SIZE_M: 16
     BLOCK_SIZE_N: 16
-    BLOCK_SIZE_K: 1024
+    BLOCK_SIZE_K: 8192
     EVEN_K: 1
 softmax_non_inner:
 - META:
@@ -801,3 +792,7 @@ index_put:
   - 1024
   - 2048
   - 4096
+
+global_average_pool:
+- META:
+    BLOCK_SIZE: 32

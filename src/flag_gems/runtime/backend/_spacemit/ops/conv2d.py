@@ -1,5 +1,4 @@
 import torch
-import torch.nn.functional as F
 import triton
 import triton.language as tl
 
@@ -131,119 +130,149 @@ def im2col(input, N, C, H, W, R, S, stride, padding, dilation):
 
 @libentry()
 @libtuner(
-    configs=runtime.get_tuned_config("mm"),
+    configs=runtime.get_tuned_config("bmm"),
     key=["M", "N", "K"],
 )
 
+
 @triton.jit
-def mm_kernel(
-    a_ptr,
-    b_ptr,
-    c_ptr,
+def bmm_kernel(
+    A,
+    B,
+    O,
     M,
     N,
     K,
+    stride_ab,
     stride_am,
     stride_ak,
-    stride_bk,
     stride_bn,
-    stride_cm,
+    stride_bk,
+    stride_cb,
     stride_cn,
+    stride_cm,
     dot_out_dtype: tl.constexpr,
-    BLOCK_SIZE_M: tl.constexpr,
-    BLOCK_SIZE_N: tl.constexpr,
-    BLOCK_SIZE_K: tl.constexpr,
-    EVEN_K: tl.constexpr,
+    TILE_M: tl.constexpr,
+    TILE_N: tl.constexpr,
+    TILE_K: tl.constexpr,
+    GROUP_M: tl.constexpr,
+    DIVISIBLE_K: tl.constexpr,
 ):
-    pid_m = tl.program_id(0)
-    pid_n = tl.program_id(1)
 
-    a_block_ptr = tl.make_block_ptr(
-        base=a_ptr,
-        shape=[M, K],
-        strides=[stride_am, stride_ak],
-        offsets=[pid_m * BLOCK_SIZE_M, 0],
-        block_shape=[BLOCK_SIZE_M, BLOCK_SIZE_K],
-        order=[1, 0],
+    pidx = tl.program_id(0)
+    pidy = tl.program_id(1)
+    pid_b = tl.program_id(2)
+
+    if GROUP_M == 1:
+        pid_m, pid_n = pidx, pidy
+
+
+    block_m = pid_m * TILE_M
+    block_n = pid_n * TILE_N
+
+
+    offset_a = pid_b * stride_ab
+    offset_o = pid_b * stride_cb
+
+
+    a_ptr = tl.make_block_ptr(
+        A + offset_a,
+        shape=(M, K),
+        strides=(stride_am, stride_ak),
+        offsets=(block_m, 0),
+        block_shape=(TILE_M, TILE_K),
+        order=(1, 0),
     )
 
-    b_block_ptr = tl.make_block_ptr(
-        base=b_ptr,
-        shape=[K, N],
-        strides=[stride_bk, stride_bn],
-        offsets=[0, pid_n * BLOCK_SIZE_N],
-        block_shape=[BLOCK_SIZE_K, BLOCK_SIZE_N],
-        order=[1, 0],
+    b_ptr = tl.make_block_ptr(
+        B,
+        shape=(N, K),
+        strides=(stride_bn, stride_bk),
+        offsets=(block_n, 0),
+        block_shape=(TILE_N, TILE_K),
+        order=(1, 0),
     )
 
-    accumulator = tl.zeros((BLOCK_SIZE_M, BLOCK_SIZE_N), dtype=tl.float32)
+    o_ptr = tl.make_block_ptr(
+        O + offset_o,
+        shape=(N, M),
+        strides=(stride_cn, stride_cm),
+        offsets=(block_n, block_m),
+        block_shape=(TILE_N, TILE_M),
+        order=(1, 0),
+    )
 
-    if EVEN_K:
-        a = tl.load(a_block_ptr, boundary_check=(0, 1))
-        b = tl.load(b_block_ptr, boundary_check=(0, 1))
-        accumulator += tl.dot(a, b, allow_tf32=False)
+
+    acc = tl.zeros((TILE_N, TILE_M), dtype=tl.float32)
+
+
+    if DIVISIBLE_K:
+        for k in range(0, K, TILE_K):
+            a_tile = tl.load(a_ptr, boundary_check=(0, 1))
+            b_tile = tl.load(b_ptr, boundary_check=(0, 1))
+
+            acc += tl.dot(b_tile, tl.trans(a_tile))
+
+            a_ptr = tl.advance(a_ptr, [0, TILE_K])
+            b_ptr = tl.advance(b_ptr, [0, TILE_K])
     else:
-        for k in range(0, tl.cdiv(K, BLOCK_SIZE_K)):
-            a = tl.load(a_block_ptr, boundary_check=(0, 1))
-            b = tl.load(b_block_ptr, boundary_check=(0, 1))
-            accumulator += tl.dot(a, b, allow_tf32=False)
-            a_block_ptr = tl.advance(a_block_ptr, (0, BLOCK_SIZE_K))
-            b_block_ptr = tl.advance(b_block_ptr, (BLOCK_SIZE_K, 0))
+        a_tile = tl.load(a_ptr, boundary_check=(0, 1))
+        b_tile = tl.load(b_ptr, boundary_check=(0, 1))
+        acc += tl.dot(b_tile, tl.trans(a_tile))
 
-    c = accumulator.to(dot_out_dtype)
-
-    c_block_ptr = tl.make_block_ptr(
-        base=c_ptr,
-        shape=[M, N],
-        strides=[stride_cm, stride_cn],
-        offsets=[pid_m * BLOCK_SIZE_M, pid_n * BLOCK_SIZE_N],
-        block_shape=[BLOCK_SIZE_M, BLOCK_SIZE_N],
-        order=[1, 0],
-    )
-
-    tl.store(c_block_ptr, c, boundary_check=(0, 1))
+    c = acc.to(dot_out_dtype)
 
 
-def mm(a, b):
-    if a.stride(0) > 1 and a.stride(1) > 1:
-        a = a.contiguous()
-    if b.stride(0) > 1 and b.stride(1) > 1:
-        b = b.contiguous()
+    tl.store(o_ptr, c, boundary_check=(0, 1))
 
-    assert a.shape[1] == b.shape[0], "incompatible dimensions"
-    M, K = a.shape
-    K, N = b.shape
 
-    c = torch.empty((M, N), device=a.device, dtype=a.dtype)
+def bmm(A, B):
+    batch, M, K = A.shape
+    _, N, _ = B.shape
+
+    if A.stride(0) > 1 and A.stride(1) > 1:
+        A = A.contiguous()
+    if B.stride(0) > 1 and B.stride(1) > 1:
+        B = B.contiguous()
+
+    out = torch.empty((batch, N, M), dtype=A.dtype, device=A.device)
     dot_out_dtype = tl.float32
 
-    grid = lambda META: (
-        triton.cdiv(M, META["BLOCK_SIZE_M"]),
-        triton.cdiv(N, META["BLOCK_SIZE_N"]),
+    grid_fn = lambda meta: (
+        triton.cdiv(meta["M"], meta["TILE_M"]),
+        triton.cdiv(meta["N"], meta["TILE_N"]),
+        batch,
     )
-
-    with torch.device(a.device):
-        mm_kernel[grid](
-            a, b, c,
-            M, N, K,
-            a.stride(0), a.stride(1),
-            b.stride(0), b.stride(1),
-            c.stride(0), c.stride(1),
+    with torch_device_fn.device(A.device):
+        bmm_kernel[grid_fn](
+            A,
+            B,
+            out,
+            M,
+            N,
+            K,
+            A.stride(0),
+            A.stride(1),
+            A.stride(2),
+            B.stride(1),
+            B.stride(2),
+            out.stride(0),
+            out.stride(1),
+            out.stride(2),
             dot_out_dtype=dot_out_dtype,
         )
-
-    return c
+    return out
 
 
 class Conv2d(torch.autograd.Function):
     @staticmethod
-    def forward(ctx, input, weight, bias, stride, padding, dilation):
+    def forward(ctx, input, weight, bias, padding, stride, dilation, groups):
         ctx.stride = stride
         ctx.padding = padding
         ctx.dilation = dilation
 
         N, C, H, W = input.shape
-        K, C, R, S = weight.shape
+        OC, _, R, S = weight.shape
         str_h, str_w = stride
         pad_h, pad_w = padding
         dil_h, dil_w = dilation
@@ -251,26 +280,29 @@ class Conv2d(torch.autograd.Function):
         P = (H + 2 * pad_h - dil_h * (R - 1) - 1) // str_h + 1
         Q = (W + 2 * pad_w - dil_w * (S - 1) - 1) // str_w + 1
 
-        # [N*P*Q, C*R*S]
+        # [N*P*Q, IC*R*S]
         input_col = im2col(input, N, C, H, W, R, S, (str_h, str_w), (pad_h, pad_w), (dil_h, dil_w))
 
-        # [K, C*R*S]
-        weight_reshaped = weight.view(K, -1)
+        # [N, P*Q, IC*R*S]
+        input_col = input_col.view(N, P*Q, C*R*S)
 
-        output = mm(input_col, weight_reshaped.t())
-        # output = input_col@weight_reshaped.t()
+        # [1, OC, IC*R*S]
+        weight = weight.view(1, OC, -1)
 
-        output = output.view(N, P, Q, K).permute(0, 3, 1, 2)
+        output = bmm(input_col, weight)
+
+        # output: [N, OC, P, Q]
+        output = output.view(N, OC, P, Q)
 
         if bias is not None:
             output += bias[None, :, None, None]
 
-        ctx.save_for_backward(input_col, weight_reshaped, input, weight, bias)
+        ctx.save_for_backward(input_col, weight, input, weight, bias)
         return output
 
     @staticmethod
     def backward(ctx, grad_output):
         pass
 
-def conv2d(input, weight, bias=None, stride=1, padding=0, dilation=1):
-    return Conv2d.apply(input, weight, bias, stride, padding, dilation)
+def conv2d(input, weight, bias=None, padding=0, stride=1, dilation=1, groups=1):
+    return Conv2d.apply(input, weight, bias, padding, stride, dilation, groups)

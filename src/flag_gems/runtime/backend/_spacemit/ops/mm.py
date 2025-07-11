@@ -14,6 +14,8 @@ from flag_gems.utils import libentry, libtuner
     configs=runtime.get_tuned_config("mm"),
     key=["M", "N", "K"],
 )
+
+@triton.heuristics(runtime.get_heuristic_config("mm"))
 @triton.jit
 def mm_kernel(
     a_ptr,

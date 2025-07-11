@@ -16,7 +16,7 @@ class vendors(Enum):
     AMD = 7
     AIPU = 8
     ASCEND = 9
-    SPACEMIT = 100
+    SPACEMIT = 10
 
     @classmethod
     def get_all_vendors(cls) -> dict:

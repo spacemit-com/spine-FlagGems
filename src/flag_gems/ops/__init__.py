@@ -27,7 +27,7 @@ from .bitwise_or import (
 )
 from .bmm import bmm
 from .cat import cat
-from .clamp import clamp, clamp_, clamp_tensor, clamp_tensor_
+from .clamp import clamp, clamp_, clamp_tensor, clamp_tensor_, clamp_min_
 from .contiguous import contiguous
 from .conv1d import conv1d
 from .conv2d import conv2d
@@ -169,6 +169,8 @@ from .weightnorm import weight_norm_interface, weight_norm_interface_backward
 from .where import where_scalar_other, where_scalar_self, where_self, where_self_out
 from .zeros import zeros
 from .zeros_like import zeros_like
+from .mean import global_avg_pool
+from .maxpool import maxpool2d
 
 __all__ = [
     "log_sigmoid",
@@ -204,6 +206,7 @@ __all__ = [
     "bmm",
     "clamp",
     "clamp_",
+    "clamp_min_",
     "clamp_tensor",
     "clamp_tensor_",
     "cos",
@@ -394,4 +397,6 @@ __all__ = [
     "mse_loss",
     "log",
     "to_dtype",
+    "global_avg_pool",
+    "maxpool2d"
 ]

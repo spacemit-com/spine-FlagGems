@@ -15,6 +15,8 @@ from flag_gems.utils import triton_lang_extension as tle
     configs=runtime.get_tuned_config("addmm"),
     key=["M", "N", "K"],
 )
+
+@triton.heuristics(runtime.get_heuristic_config("mm"))
 @triton.jit(do_not_specialize=["alpha", "beta"])
 def addmm_kernel(
     a_ptr,
