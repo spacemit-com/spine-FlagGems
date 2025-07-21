@@ -9,7 +9,9 @@ from .bmm import bmm
 from .conv2d import conv2d
 from .batch_norm import batch_norm
 from .maxpool import maxpool2d
+from .all import all
+from .any import any
 
 __all__ = ["gelu", "mm", "silu", "mean_dim", "rsqrt", "layer_norm",
            "addmm", "bmm", "conv2d", "batch_norm", "global_avg_pool",
-           "maxpool2d"]
+           "maxpool2d", "all", "any"]

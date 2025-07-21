@@ -6,10 +6,11 @@ from triton.backends.triton_shared.driver import CPUDriver
 
 triton.runtime.driver.set_active(CPUDriver())
 import flag_gems
-import torchvision.models as models
+# import torchvision.models as models
 
 def test_accuracy_resnet18(dtype, device):
-    model = models.resnet18(pretrained=False).eval()
+    # model = models.resnet18(pretrained=False).eval()
+    model = torch.hub.load('/home/share/nfs_share/pytorch_vision_v0.10.0', 'resnet18', pretrained=True, source='local')
     inputs = torch.randn(1, 3, 224, 224).to(device)
 
     ref_model = copy.deepcopy(model)
