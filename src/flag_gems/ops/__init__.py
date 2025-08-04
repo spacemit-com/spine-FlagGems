@@ -159,6 +159,7 @@ from .topk import topk
 from .triu import triu
 from .uniform import uniform_
 from .unique import _unique2
+from .unfold import unfold
 from .upsample_bicubic2d_aa import _upsample_bicubic2d_aa
 from .upsample_nearest2d import upsample_nearest2d
 from .var_mean import var_mean
@@ -350,6 +351,7 @@ __all__ = [
     "prod",
     "prod_dim",
     "quantile",
+    "unfold",
     "var_mean",
     "vector_norm",
     "log_softmax",
