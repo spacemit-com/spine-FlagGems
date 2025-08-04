@@ -4,6 +4,7 @@ from typing import Callable, Iterable, List, Mapping, Optional, Sequence, Tuple
 
 import torch
 import triton
+import flag_gems
 from triton.runtime.jit import JITFunction
 
 from flag_gems.utils.code_cache import code_cache_dir
@@ -464,7 +465,10 @@ class KernelGenerator:
         code.writeline("# loads")
         for i in range(schema.num_input_tensors()):
             strides = _tuple_content(tuple(f"in{i}_stride{j}" for j in range(ndim)))
-            order = _tuple_content(tuple(f"in{i}_stride_order{j}" for j in range(ndim)))
+            if flag_gems.vendor_name == "spacemit":
+                order = _tuple_content(tuple(f"{ndim-j-1}"for j in range(ndim)))
+            else:
+                order = _tuple_content(tuple(f"in{i}_stride_order{j}" for j in range(ndim)))
             code.writeline(
                 f"in{i}_bptr = tl.make_block_ptr("
                 f"in{i}_ptr, ({shape}), ({strides}), ({offsets}), ({tile_sizes}), order=({order}))"
@@ -1029,6 +1033,7 @@ class ModuleGenerator:
         self.kernel_gen = KernelGenerator(
             function_schema, scalar_fn, ndim, jit_fn_name, config
         )
+        self.jit_fn_name = jit_fn_name
 
     @staticmethod
     def generate_imports(code: IndentedBuffer) -> IndentedBuffer:
@@ -1054,12 +1059,16 @@ class ModuleGenerator:
     def codegen(self, code: IndentedBuffer):
         # the only runtime determined factor is the rank of the task space
         code = self.generate_imports(code)
-        if self.config.prefer_1d_tile:
+        if flag_gems.vendor_name == "spacemit" and self.jit_fn_name.startswith("mul_func"):
             code = self.wrapper_gen.codegen_1d_tile(code)
             code = self.kernel_gen.codegen_1d_tile(code)
         else:
-            code = self.wrapper_gen.codegen_nd_tile(code)
-            code = self.kernel_gen.codegen_nd_tile(code)
+            if self.config.prefer_1d_tile:
+                code = self.wrapper_gen.codegen_1d_tile(code)
+                code = self.kernel_gen.codegen_1d_tile(code)
+            else:
+                code = self.wrapper_gen.codegen_nd_tile(code)
+                code = self.kernel_gen.codegen_nd_tile(code)
         return code
 
 
@@ -1238,7 +1247,6 @@ class PointwiseDynamicFunction:
             return self.overloads[ndim]
 
         code = IndentedBuffer()
-
         scalar_fn_name = self._scalar_fn.__name__
         kernel_name = f"{scalar_fn_name}_kernel_rank_{ndim}"
         wrapper_name = f"{scalar_fn_name}_wrapper_rank_{ndim}"
