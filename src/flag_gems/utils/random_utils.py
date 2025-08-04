@@ -38,12 +38,25 @@ except AttributeError:
 # updates the next offset by adding `increment`.
 def philox_backend_seed_offset(increment, device=None):
     device = device or torch_device_fn.current_device()
-    gen = torch_device_fn.default_generators[device]
-    state_copy = gen.get_state()
     # TODO[kunlunxin]: we will upgrade torch version in 2025.04
     if flag_gems.vendor_name == "kunlunxin":
+        gen = torch_device_fn.default_generators[device]
+        state_copy = gen.get_state()
         c0, c1 = state_copy.view(torch.int64)[-2], state_copy.view(torch.int64)[-1]
+    elif flag_gems.vendor_name == "spacemit":
+        gen = torch.Generator(device='cpu')
+        state = gen.get_state()
+        state_tensor = torch.ByteTensor(state)
+        state_view = state_tensor.view(torch.int64)
+        seed = state_view[-2].item()
+        offset = state_view[-1].item()
+        increment = (increment + 3) // 4 * 4
+        state_view[-1] += increment
+        gen.set_state(state_tensor)
+        return seed, offset
     else:
+        gen = torch_device_fn.default_generators[device]
+        state_copy = gen.get_state()
         c0, c1 = state_copy.view(torch.int64)
 
     seed, offset = int(c0), int(c1)
