@@ -46,14 +46,10 @@ def philox_backend_seed_offset(increment, device=None):
     elif flag_gems.vendor_name == "spacemit":
         gen = torch.Generator(device='cpu')
         state = gen.get_state()
-        state_tensor = torch.ByteTensor(state)
-        state_view = state_tensor.view(torch.int64)
-        seed = state_view[-2].item()
-        offset = state_view[-1].item()
-        increment = (increment + 3) // 4 * 4
-        state_view[-1] += increment
-        gen.set_state(state_tensor)
-        return seed, offset
+        state_copy = torch.ByteTensor(state)
+        state_view = state_copy.view(torch.int64)
+        c0 = state_view[-2].item()
+        c1 = state_view[-1].item()
     else:
         gen = torch_device_fn.default_generators[device]
         state_copy = gen.get_state()
