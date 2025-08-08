@@ -10,7 +10,6 @@ from flag_gems.utils import libentry
 logger = logging.getLogger(__name__)
 
 
-@libentry()
 @triton.jit(do_not_specialize=["ignore_index"])
 def nll_loss_forward_kernel(
     inp_ptr,
@@ -23,68 +22,44 @@ def nll_loss_forward_kernel(
     reduction: tl.constexpr = 1,
     BLOCK_N: tl.constexpr = 128,
 ):
-    pid_n = tl.program_id(0)
-    offsets_n = pid_n * BLOCK_N + tl.arange(0, BLOCK_N)
+    pid_nd = tl.program_id(0)
+    offset_nd = pid_nd * BLOCK_N + tl.arange(0, BLOCK_N)
+    offset_d = offset_nd % 1
+    offset_n = offset_nd // 1
 
-    mask_n = offsets_n < N
+    mask_block = offset_nd < N
 
-    tgt_block_ptr = tl.make_block_ptr(
-        base=tgt_ptr,
-        shape=(N,),
-        strides=(1,),
-        offsets=(pid_n * BLOCK_N,),
-        block_shape=(BLOCK_N,),
-        order=(0,)
-    )
-    tgt = tl.load(tgt_block_ptr, boundary_check=(0,))
+    tgt_ptrs = tgt_ptr + offset_n + offset_d
+    tgt = tl.load(tgt_ptrs, mask=mask_block, other=0)
     assert tgt >= 0 and tgt < C, "Invalid target value"
-    ignore_mask = not (tgt == ignore_index) and mask_n
+    ignore_mask = not (tgt == ignore_index) and mask_block
 
     if wgt_ptr is None:
         wgt_tgt = ignore_mask.to(tl.float32)
     else:
-        wgt_block_ptr = tl.make_block_ptr(
-            base=wgt_ptr,
-            shape=(N,),
-            strides=(1,),
-            offsets=(pid_n * BLOCK_N,),
-            block_shape=(BLOCK_N,),
-            order=(0,)
-        )
-        wgt = tl.load(wgt_block_ptr, boundary_check=(0,)).to(tl.float32)
-        wgt_tgt = tl.where(ignore_mask, wgt, 0.0)
+        wgt_tgt = tl.load(wgt_ptr + tgt, mask=ignore_mask, other=0).to(tl.float32)
 
-    inp_block_ptr = tl.make_block_ptr(
-        base=inp_ptr,
-        shape=(N, C),
-        strides=(C, 1),
-        offsets=(pid_n * BLOCK_N, 0),
-        block_shape=(BLOCK_N, BLOCK_N),
-        order=(1,0)
-    )
-    inp_tgt = tl.load(inp_block_ptr, boundary_check=(0,1))
-
+    inp_tgt_ptrs = inp_ptr + offset_n * C + tgt + offset_d
+    inp_tgt = tl.load(inp_tgt_ptrs, mask=ignore_mask, other=0).to(tl.float32)
     out = inp_tgt * wgt_tgt * -1
 
     # none
     if reduction == 0:
-        tl.store(out_ptr + offsets_n, out, mask=mask_n)
+        out_ptrs = out_ptr + offset_n + offset_d
+        tl.store(out_ptrs, out, mask=mask_block)
+
     # mean
     elif reduction == 1:
         total_out = tl.sum(out)
         total_wgt = tl.sum(wgt_tgt)
-        tl.atomic_add(out_ptr, total_out, sem="relaxed")  # output
-        tl.atomic_add(out_ptr + 1, total_wgt, sem="relaxed")  # weight
-        tl.atomic_add(out_ptr + 2, 1, sem="release")  # counter
-        counter = tl.load(out_ptr + 2)
-        if counter == tl.num_programs(0):
-            total_out = tl.load(out_ptr)
-            total_wgt = tl.load(out_ptr + 1)
-            tl.store(out_ptr + 3, total_out / total_wgt)
+        tl.store(out_ptr, total_out)
+        tl.store(out_ptr + 1, total_wgt)
+        tl.store(out_ptr + 3, total_out / total_wgt)
+
     # sum
     else:
         total_out = tl.sum(out)
-        tl.atomic_add(out_ptr, total_out, sem="relaxed")
+        tl.store(out_ptr, total_out)
 
 
 @libentry()
@@ -129,7 +104,6 @@ def nll_loss_backward_kernel(
     tl.store(inp_grad_ptrs, inp_grad, mask=mask_n)
 
 
-@libentry()
 @triton.jit(do_not_specialize=["ignore_index"])
 def nll_loss2d_forward_kernel(
     inp_ptr,
@@ -168,22 +142,19 @@ def nll_loss2d_forward_kernel(
     if reduction == 0:
         out_ptrs = out_ptr + offset_n * D + offset_d
         tl.store(out_ptrs, out, mask=mask_block)
+
     # mean
     elif reduction == 1:
         total_out = tl.sum(out)
         total_wgt = tl.sum(wgt_tgt)
-        tl.atomic_add(out_ptr, total_out, sem="relaxed")  # output
-        tl.atomic_add(out_ptr + 1, total_wgt, sem="relaxed")  # weight
-        tl.atomic_add(out_ptr + 2, 1, sem="release")  # counter
-        counter = tl.load(out_ptr + 2)
-        if counter == tl.num_programs(0):
-            total_out = tl.load(out_ptr)
-            total_wgt = tl.load(out_ptr + 1)
-            tl.store(out_ptr + 3, total_out / total_wgt)
+        tl.store(out_ptr, total_out)
+        tl.store(out_ptr + 1, total_wgt)
+        tl.store(out_ptr + 3, total_out / total_wgt)
+
     # sum
     else:
         total_out = tl.sum(out)
-        tl.atomic_add(out_ptr, total_out, sem="relaxed")
+        tl.store(out_ptr, total_out)
 
 
 @libentry()

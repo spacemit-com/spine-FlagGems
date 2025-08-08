@@ -743,8 +743,7 @@ conv2d_backward_weight:
 
 im2col:
 - META:
-    BLOCK_M: 32
-    BLOCK_K: 32
+    BLOCK_SIZE_C: 256
 
 batch_norm:
 - gen: true

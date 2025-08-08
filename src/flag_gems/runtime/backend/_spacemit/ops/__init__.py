@@ -41,7 +41,6 @@ __all__ = [
            "gelu",
            "global_avg_pool",
            "group_norm",
-           "group_norm",
            "layer_norm",
            "maxpool2d",
            "mm",

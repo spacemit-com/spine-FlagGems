@@ -10,120 +10,115 @@ from flag_gems.utils import libentry, libtuner
 @libentry()
 @libtuner(
     configs=runtime.get_tuned_config("im2col"),
-    key=["H", "W", "P", "Q", "R", "S"],
+    key=["IH", "IW", "OH", "OW", "KH", "KW"],
 )
 
 @triton.jit
 def im2col_kernel(
     input_ptr,
-    input_n, input_c, input_h, input_w,
-    stride_n, stride_c, stride_h, stride_w,
-
     output_ptr,
-    output_gemmm, output_gemmk,
-
-    R, S,
-    stride_h_conv, stride_w_conv,
+    N, C, IH, IW,
+    KH, KW,
+    stride_h, stride_w,
     pad_h, pad_w,
-    dil_h, dil_w,
-
-    P, Q,
-
-    BLOCK_M: tl.constexpr,
-    BLOCK_K: tl.constexpr,
+    dilation_h, dilation_w,
+    OH, OW,
+    input_batch_stride, input_height_stride, input_width_stride, input_channel_stride,
+    output_row_stride, output_col_stride,
+    BLOCK_SIZE_C: tl.constexpr,
 ):
-    pid_m = tl.program_id(0)
-    pid_k = tl.program_id(1)
+    pid = tl.program_id(0)
 
-    gemm_m_offset = pid_m * BLOCK_M
-    gemm_k_offset = pid_k * BLOCK_K
+    n = pid // (OH * OW)
+    ohow = pid % (OH * OW)
+    oh = ohow // OW
+    ow = ohow % OW
 
-    gemm_m_idx = gemm_m_offset + tl.arange(0, BLOCK_M)
-    gemm_k_idx = gemm_k_offset + tl.arange(0, BLOCK_K)
+    window_h = oh * stride_h - pad_h
+    window_w = ow * stride_w - pad_w
 
-    gemm_m_mask = gemm_m_idx < output_gemmm
-    gemm_k_mask = gemm_k_idx < output_gemmk
-    active_mask = gemm_m_mask[:, None] & gemm_k_mask[None, :]
-
-    pq = P * Q
-    n_idx = tl.where(gemm_m_mask, gemm_m_idx // pq, 0)
-    pq_residual = tl.where(gemm_m_mask, gemm_m_idx % pq, 0)
-    p_idx = tl.where(gemm_m_mask, pq_residual // Q, 0)
-    q_idx = tl.where(gemm_m_mask, pq_residual % Q, 0)
-
-    rs = R * S
-    c_idx = tl.where(gemm_k_mask, gemm_k_idx // rs, 0)
-    rs_residual = tl.where(gemm_k_mask, gemm_k_idx % rs, 0)
-    r_idx = tl.where(gemm_k_mask, rs_residual // S, 0)
-    s_idx = tl.where(gemm_k_mask, rs_residual % S, 0)
-
-    h_idx = p_idx[:, None] * stride_h_conv + r_idx[None, :] * dil_h - pad_h
-    w_idx = q_idx[:, None] * stride_w_conv + s_idx[None, :] * dil_w - pad_w
-
-    n_mask = n_idx[:, None] < input_n
-    c_mask = c_idx[None, :] < input_c
-    h_mask = (h_idx >= 0) & (h_idx < input_h)
-    w_mask = (w_idx >= 0) & (w_idx < input_w)
-
-    input_mask = active_mask & n_mask & c_mask & h_mask & w_mask
-
-    n_off = n_idx[:, None] * stride_n
-    c_off = c_idx[None, :] * stride_c
-    h_off = h_idx * stride_h
-    w_off = w_idx * stride_w
-
-    input_offsets = n_off + c_off + h_off + w_off
-
-    input_vals = tl.load(
-        input_ptr + input_offsets,
-        mask=input_mask,
-        other=0.0
+    input_block_ptr = tl.make_block_ptr(
+        base=input_ptr,
+        shape=(N, IH, IW, C),
+        strides=(input_batch_stride, input_height_stride, input_width_stride, input_channel_stride),
+        offsets=(n, 0, 0, 0),
+        block_shape=(1, 1, 1, BLOCK_SIZE_C),
+        order=(3, 2, 1, 0)
     )
 
-    output_offsets = (gemm_m_idx[:, None] * output_gemmk + gemm_k_idx[None, :])
-
-    tl.store(
-        output_ptr + output_offsets,
-        input_vals,
-        mask=active_mask
+    output_block_ptr = tl.make_block_ptr(
+        base=output_ptr,
+        shape=(N * OH * OW, C * KH * KW),
+        strides=(output_row_stride, output_col_stride),
+        offsets=(pid, 0),
+        block_shape=(1, BLOCK_SIZE_C),
+        order=(1, 0)
     )
 
-def im2col(input, N, C, H, W, R, S, stride, padding, dilation):
+    for kh in range(KH):
+        for kw in range(KW):
+            h = window_h + kh * dilation_h
+            w = window_w + kw * dilation_w
+
+            col_idx = (kh * KW + kw) * C
+
+            output_block_ptr_col = tl.advance(output_block_ptr, (0, col_idx))
+
+            valid_h = (h >= 0) & (h < IH)
+            valid_w = (w >= 0) & (w < IW)
+            valid = valid_h & valid_w
+
+            for c_start in range(0, C, BLOCK_SIZE_C):
+                if valid:
+                    input_block_ptr_c = tl.advance(input_block_ptr, (0, h, w, c_start))
+                    vals = tl.load(
+                        input_block_ptr_c,
+                        boundary_check=(0,1,2,3),
+                    )
+                    vals = tl.reshape(vals, (1, BLOCK_SIZE_C))
+                else:
+                    vals = tl.zeros((1, BLOCK_SIZE_C), dtype=tl.float32)
+                output_block_ptr_final = tl.advance(output_block_ptr_col, (0, c_start))
+
+                tl.store(
+                    output_block_ptr_final,
+                    vals,
+                    boundary_check=(0,1)
+                )
+
+
+def im2col(input, N, C, IH, IW, KH, KW, stride, padding, dilation):
     str_h, str_w = stride
     pad_h, pad_w = padding
     dil_h, dil_w = dilation
 
-    P = (H + 2 * pad_h - dil_h * (R - 1) - 1) // str_h + 1
-    Q = (W + 2 * pad_w - dil_w * (S - 1) - 1) // str_w + 1
+    OH = (IH + 2 * pad_h - dil_h * (KH - 1) - 1) // str_h + 1
+    OW = (IW + 2 * pad_w - dil_w * (KW - 1) - 1) // str_w + 1
 
-    GEMM_M = N * P * Q
-    GEMM_K = C * R * S
+    GEMM_M = N * OH * OW
+    GEMM_N = C * KH * KW
 
     im2col_input = torch.empty(
-        (GEMM_M, GEMM_K),
+        (GEMM_M, GEMM_N),
         dtype=input.dtype,
         device=input.device
     )
 
-    grid = lambda meta: (
-        triton.cdiv(GEMM_M, meta['BLOCK_M']),
-        triton.cdiv(GEMM_K, meta['BLOCK_K'])
-    )
+    grid = (N * OH * OW,)
+
+    input = input.permute(0,2,3,1).contiguous()
 
     im2col_kernel[grid](
         input,
-        N, C, H, W,
-        input.stride(0), input.stride(1), input.stride(2), input.stride(3),
-
         im2col_input,
-        GEMM_M, GEMM_K,
-
-        R, S,
+        N, C, IH, IW,
+        KH, KW,
         str_h, str_w,
         pad_h, pad_w,
         dil_h, dil_w,
-
-        P, Q,
+        OH, OW,
+        input.stride(0), input.stride(1), input.stride(2), input.stride(3),
+        im2col_input.stride(0), im2col_input.stride(1),
     )
 
     return im2col_input
@@ -273,26 +268,16 @@ class Conv2d(torch.autograd.Function):
 
         N, C, H, W = input.shape
         OC, _, R, S = weight.shape
-        if isinstance(stride, (list, tuple)):
-            str_h, str_w = stride
-        else:
-            str_h = str_w = stride
-
-        if isinstance(padding, (list, tuple)):
-            pad_h, pad_w = padding
-        else:
-            pad_h = pad_w = padding
-
-        if isinstance(dilation, (list, tuple)):
-            dil_h, dil_w = dilation
-        else:
-            dil_h = dil_w = dilation
+        str_h, str_w = stride
+        pad_h, pad_w = padding
+        dil_h, dil_w = dilation
 
         P = (H + 2 * pad_h - dil_h * (R - 1) - 1) // str_h + 1
         Q = (W + 2 * pad_w - dil_w * (S - 1) - 1) // str_w + 1
 
         # [N*P*Q, IC*R*S]
         input_col = im2col(input, N, C, H, W, R, S, (str_h, str_w), (pad_h, pad_w), (dil_h, dil_w))
+        input_col = input_col.view(N*P*Q,R*S,C).permute(0,2,1).contiguous().view(N*P*Q,C*R*S)
 
         # [N, P*Q, IC*R*S]
         input_col = input_col.view(N, P*Q, C*R*S)
