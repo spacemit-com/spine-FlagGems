@@ -30,7 +30,6 @@ def mm_kernel(
     stride_bn,
     stride_cm,
     stride_cn,
-    dot_out_dtype: tl.constexpr,
     BLOCK_SIZE_M: tl.constexpr,
     BLOCK_SIZE_N: tl.constexpr,
     BLOCK_SIZE_K: tl.constexpr,
@@ -71,7 +70,7 @@ def mm_kernel(
             a_block_ptr = tl.advance(a_block_ptr, (0, BLOCK_SIZE_K))
             b_block_ptr = tl.advance(b_block_ptr, (BLOCK_SIZE_K, 0))
 
-    c = accumulator.to(dot_out_dtype)
+    c = accumulator.to(c_ptr.dtype.element_ty)
 
     c_block_ptr = tl.make_block_ptr(
         base=c_ptr,
@@ -99,7 +98,6 @@ def mm(a, b):
     _, N = b.shape
     # allocates output
     c = torch.empty((M, N), device=device, dtype=a.dtype)
-    dot_out_dtype = tl.float32
     # launch kernel
     grid = lambda META: (
         triton.cdiv(M, META["BLOCK_SIZE_M"]),
@@ -119,6 +117,5 @@ def mm(a, b):
             b.stride(1),
             c.stride(0),
             c.stride(1),
-            dot_out_dtype=dot_out_dtype,
         )
     return c
