@@ -48,7 +48,7 @@ def mv_kernel(
         block_shape=[BLOCK_M,],
         order=[0,],
     )
-    acc = tl.zeros((BLOCK_N, BLOCK_M), dtype=tl.float32)
+    acc = tl.zeros((BLOCK_N, BLOCK_M), dtype=C.dtype.element_ty)
     for m in range(0, M, BLOCK_M):
         a = tl.load(a_block_ptr, boundary_check=(0, 1))
         b = tl.load(b_block_ptr, boundary_check=(0, ))

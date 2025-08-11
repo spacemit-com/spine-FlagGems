@@ -80,7 +80,7 @@ def index_select_heur_block_n(args):
 
 
 def mm_heur_even_k(args):
-    return args["K"] % (args["BLOCK_SIZE_K"]) == 0
+    return args["K"] // (args["BLOCK_SIZE_K"]) == 0
 
 
 def rand_heur_block(args):

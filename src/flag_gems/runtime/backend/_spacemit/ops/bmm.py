@@ -36,7 +36,6 @@ def bmm_kernel(
     stride_cb,
     stride_cm,
     stride_cn,
-    dot_out_dtype: tl.constexpr,
     TILE_M: tl.constexpr,  # Tile size in M dimension
     TILE_N: tl.constexpr,  # Tile size in N dimension
     TILE_K: tl.constexpr,  # Tile size in K dimension
@@ -108,7 +107,7 @@ def bmm_kernel(
         b_tile = tl.load(b_ptr, boundary_check=(0, 1))
         acc += tl.dot(a_tile, b_tile)
 
-    c = acc.to(dot_out_dtype)
+    c = acc.to(o_ptr.dtype.element_ty)
 
     # Write the final result to the output matrix
     tl.store(o_ptr, c, boundary_check=(0, 1))
@@ -123,7 +122,6 @@ def bmm(A, B):
     if B.stride(0) > 1 and B.stride(1) > 1:
         B = B.contiguous()
     out = torch.empty((batch, M, N), dtype=A.dtype, device=A.device)
-    dot_out_dtype = tl.float32
 
     grid_fn = lambda meta: (
         triton.cdiv(meta["M"], meta["TILE_M"]),
@@ -147,6 +145,5 @@ def bmm(A, B):
             out.stride(0),
             out.stride(1),
             out.stride(2),
-            dot_out_dtype=dot_out_dtype,
         )
     return out
