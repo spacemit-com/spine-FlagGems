@@ -6,7 +6,7 @@ from .rsqrt import rsqrt
 from .layernorm import layer_norm
 from .addmm import addmm
 from .bmm import bmm
-from .conv2d import conv2d
+from .conv2d import conv2d, thnn_conv2d
 from .conv1d import conv1d
 from .conv_depthwise2d import _conv_depthwise2d
 from .batch_norm import batch_norm
@@ -54,6 +54,7 @@ __all__ = [
            "rsqrt",
            "silu",
            "sort",
+           "thnn_conv2d",
            "unfold",
            "var_mean",
            "vector_norm",

@@ -147,13 +147,8 @@ max:
 addmm:
 - META:
     BLOCK_SIZE_M: 16
-    BLOCK_SIZE_N: 32
-    BLOCK_SIZE_K: 512
-    EVEN_K: 1
-- META:
-    BLOCK_SIZE_M: 16
     BLOCK_SIZE_N: 16
-    BLOCK_SIZE_K: 1024
+    BLOCK_SIZE_K: 8192
     EVEN_K: 1
 cross_entropy_loss:
 - META:

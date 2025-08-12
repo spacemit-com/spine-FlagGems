@@ -592,3 +592,6 @@ class Conv2d(torch.autograd.Function):
 # todo test SymInt[2] of stride or padding
 def conv2d(input, weight, bias=None, stride=1, padding=0, dilation=1, groups=1):
     return Conv2d.apply(input, weight, bias, stride, padding, dilation, groups)
+
+def thnn_conv2d(input, weight, kernel_size=0, bias=None, stride=1, dilation=1, groups=1):
+    pass

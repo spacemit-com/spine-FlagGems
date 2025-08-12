@@ -30,7 +30,7 @@ from .cat import cat
 from .clamp import clamp, clamp_, clamp_tensor, clamp_tensor_, clamp_min_
 from .contiguous import contiguous
 from .conv1d import conv1d
-from .conv2d import conv2d
+from .conv2d import conv2d, thnn_conv2d
 from .conv_depthwise2d import _conv_depthwise2d
 from .cos import cos, cos_
 from .count_nonzero import count_nonzero
@@ -227,6 +227,7 @@ __all__ = [
     "normed_cumsum",
     "true_divide",
     "true_divide_",
+    "thnn_conv2d",
     "div_mode",
     "div_mode_",
     "floor_divide",

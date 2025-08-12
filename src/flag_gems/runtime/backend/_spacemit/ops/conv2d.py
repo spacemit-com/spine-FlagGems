@@ -268,9 +268,19 @@ class Conv2d(torch.autograd.Function):
 
         N, C, H, W = input.shape
         OC, _, R, S = weight.shape
-        str_h, str_w = stride
-        pad_h, pad_w = padding
-        dil_h, dil_w = dilation
+        if isinstance(stride, (list, tuple)):
+            str_h, str_w = stride
+        else:
+            str_h = str_w = stride
+
+        if isinstance(padding, (list, tuple)):
+            pad_h, pad_w = padding
+        else:
+            pad_h = pad_w = padding
+        if isinstance(dilation, (list, tuple)):
+            dil_h, dil_w = dilation
+        else:
+            dil_h = dil_w = dilation
 
         P = (H + 2 * pad_h - dil_h * (R - 1) - 1) // str_h + 1
         Q = (W + 2 * pad_w - dil_w * (S - 1) - 1) // str_w + 1
@@ -301,4 +311,8 @@ class Conv2d(torch.autograd.Function):
         pass
 
 def conv2d(input, weight, bias=None, padding=0, stride=1, dilation=1, groups=1):
+    return Conv2d.apply(input, weight, bias, padding, stride, dilation, groups)
+
+def thnn_conv2d(input, weight, kernel_size=0, bias=None, stride=1, padding=0, groups=1):
+    dilation=1
     return Conv2d.apply(input, weight, bias, padding, stride, dilation, groups)

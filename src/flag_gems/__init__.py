@@ -42,6 +42,7 @@ def enable(
         (
             ("native_convolution", conv2d, Autograd.disable),
             ("mkldnn_convolution", conv2d, Autograd.disable),
+            ("thnn_conv2d", thnn_conv2d, Autograd.disable),
             ("abs", abs, Autograd.disable),
             ("abs_", abs_, Autograd.disable),
             ("add.Tensor", add, Autograd.disable),
