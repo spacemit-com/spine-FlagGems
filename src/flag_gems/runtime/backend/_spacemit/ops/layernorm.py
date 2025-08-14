@@ -261,7 +261,7 @@ class LayerNorm(torch.autograd.Function):
             ctx.save_for_backward(x, weight, bias, mean, rstd)
             ctx.M = M
             ctx.N = N
-        return y
+        return y, mean, rstd
 
     @staticmethod
     def backward(ctx, out_grad, mean_grad, rstd_grad):
