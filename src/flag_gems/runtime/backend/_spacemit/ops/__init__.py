@@ -25,6 +25,7 @@ from .where import  where_scalar_other, where_scalar_self, where_self, where_sel
 from .multinomial import multinomial
 from .sort import sort
 from .unfold import unfold
+from .triu import triu
 
 __all__ = [
            "all",
@@ -61,5 +62,6 @@ __all__ = [
            "where_scalar_other",
            "where_scalar_self",
            "where_self",
-           "where_self_out"
+           "where_self_out",
+           "triu"
            ]
