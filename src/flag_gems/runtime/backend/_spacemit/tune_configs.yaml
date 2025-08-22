@@ -30,7 +30,6 @@ bmm:
     TILE_N: 16
     TILE_K: 8192
     GROUP_M: 1
-    DIVISIBLE_K: 0
 argmax:
 - META:
     BLOCK_M: 8
@@ -69,7 +68,6 @@ mm:
     BLOCK_SIZE_M: 16
     BLOCK_SIZE_N: 16
     BLOCK_SIZE_K: 8192
-    EVEN_K: 1
 softmax_non_inner:
 - META:
     TILE_K: 32
@@ -149,7 +147,6 @@ addmm:
     BLOCK_SIZE_M: 16
     BLOCK_SIZE_N: 16
     BLOCK_SIZE_K: 8192
-    EVEN_K: 1
 cross_entropy_loss:
 - META:
     BLOCK_C: 256
