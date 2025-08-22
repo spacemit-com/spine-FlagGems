@@ -4,18 +4,6 @@ import torch
 import triton
 import triton.language as tl
 
-from flag_gems import runtime
-from flag_gems.runtime import torch_device_fn
-from flag_gems.utils import libentry, libtuner
-
-
-@libentry()
-@libtuner(
-    configs=runtime.get_tuned_config("mm"),
-    key=["M", "N", "K"],
-)
-
-@triton.heuristics(runtime.get_heuristic_config("mm"))
 @triton.jit
 def mm_kernel(
     a_ptr,
@@ -30,10 +18,10 @@ def mm_kernel(
     stride_bn,
     stride_cm,
     stride_cn,
-    BLOCK_SIZE_M: tl.constexpr,
-    BLOCK_SIZE_N: tl.constexpr,
-    BLOCK_SIZE_K: tl.constexpr,
-    EVEN_K: tl.constexpr,
+    BLOCK_SIZE_M: tl.constexpr = 32,
+    BLOCK_SIZE_N: tl.constexpr = 32,
+    BLOCK_SIZE_K: tl.constexpr = 512,
+    EVEN_K: tl.constexpr = 1,
 ):
     pid_m = tl.program_id(0)
     pid_n = tl.program_id(1)
