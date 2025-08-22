@@ -52,7 +52,7 @@ def layer_norm_common_kernel(
         x_ptr_desc = tl.advance(x_ptr_desc, [TILE_N])
 
     mean = mean / N
-    var = var / N
+    var = var / N - (mean * mean)
     rstd = tl.math.rsqrt(var + eps)
     # Write mean / rstd
     tl.store(Mean + row, mean)
