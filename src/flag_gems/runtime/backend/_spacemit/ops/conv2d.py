@@ -129,7 +129,7 @@ def im2col(input, N, C, IH, IW, KH, KW, stride, padding, dilation):
     key=["M", "N", "K"],
 )
 
-
+@triton.heuristics(runtime.get_heuristic_config("bmm"))
 @triton.jit
 def bmm_kernel(
     A,

@@ -27,7 +27,7 @@ def bmm_heur_divisible_n(args):
 
 
 def bmm_heur_divisible_k(args):
-    return args["K"] % args["TILE_K"] == 0
+    return args["K"] // args["TILE_K"] == 0
 
 
 def dropout_heur_block(args):
@@ -234,8 +234,6 @@ HEURISTICS_CONFIGS = {
         "BLOCK_N": argmin_heur_block_n,
     },
     "bmm": {
-        "DIVISIBLE_M": bmm_heur_divisible_m,
-        "DIVISIBLE_N": bmm_heur_divisible_n,
         "DIVISIBLE_K": bmm_heur_divisible_k,
     },
     "dropout": {

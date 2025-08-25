@@ -40,8 +40,6 @@ def bmm_kernel(
     TILE_N: tl.constexpr,  # Tile size in N dimension
     TILE_K: tl.constexpr,  # Tile size in K dimension
     GROUP_M: tl.constexpr,  # Grouping factor for M dimension
-    DIVISIBLE_M: tl.constexpr,  # Whether M is divisible by TILE_M
-    DIVISIBLE_N: tl.constexpr,  # Whether N is divisible by TILE_N
     DIVISIBLE_K: tl.constexpr,  # Whether K is divisible by TILE_K
 ):
     # Program ID for each block in the grid
