@@ -1,127 +1,117 @@
-import logging
-
 import torch
 import triton
 import triton.language as tl
-
+from flag_gems.utils.limits import get_dtype_min
 
 @triton.jit
 def maxpool2d_kernel(
     input_ptr,
     output_ptr,
-    min_val_ptr,
-    B, C, H, W,
-    kernel_h, kernel_w,
-    stride_h, stride_w,
-    pad_h, pad_w,
-    out_h, out_w,
-    input_stride_b, input_stride_c, input_stride_h, input_stride_w,
-    output_stride_b, output_stride_c, output_stride_h, output_stride_w,
-    min_val_stride_b, min_val_stride_c, min_val_stride_h, min_val_stride_w,
-
+    N, C, IH, IW,
+    OH, OW,
+    KH: tl.constexpr,
+    KW: tl.constexpr,
+    stride_h: tl.constexpr,
+    stride_w: tl.constexpr,
+    pad_h: tl.constexpr,
+    pad_w: tl.constexpr,
+    dilation_h: tl.constexpr,
+    dilation_w: tl.constexpr,
+    input_batch_stride,
+    input_channel_stride,
+    input_height_stride,
+    input_width_stride,
+    output_batch_stride,
+    output_channel_stride,
+    output_height_stride,
+    output_width_stride,
+    BLOCK_SIZE_C: tl.constexpr,
 ):
-    w_out = tl.program_id(0)
-    h_out = tl.program_id(1)
-    c_b = tl.program_id(2)
 
-    batch_idx = c_b // C
-    channel_idx = c_b % C
+    pid = tl.program_id(0)
+    n = pid // (OH * OW)
+    ohow = pid % (OH * OW)
+    oh = ohow // OW
+    ow = ohow % OW
+    c_block = tl.arange(0, BLOCK_SIZE_C)
 
-    h_start = h_out * stride_h - pad_h
-    w_start = w_out * stride_w - pad_w
+    window_h = oh * stride_h - pad_h
+    window_w = ow * stride_w - pad_w
 
-    min_val_block_ptr = tl.make_block_ptr(
-        base=min_val_ptr,
-        shape=(1, 1, 1, 1),
-        strides=(min_val_stride_b, min_val_stride_c, min_val_stride_h, min_val_stride_w),
-        offsets=(0, 0, 0, 0),
-        block_shape=(1, 1, 1, 1),
-        order=(3, 2, 1, 0),
+    min_value = get_dtype_min(input_ptr.type.element_ty)
+    max_vals = tl.full((BLOCK_SIZE_C,), min_value, dtype=tl.float32)
+    channel_mask = c_block < C
+
+    total_iters = KH * KW
+    for k in range(total_iters):
+        kh = k // KW
+        kw = k % KW
+        h = window_h + kh * dilation_h
+        w = window_w + kw * dilation_w
+
+        valid_h = (h >= 0) & (h < IH)
+        valid_w = (w >= 0) & (w < IW)
+        valid = valid_h & valid_w
+
+        input_offset = (
+            n * input_batch_stride +
+            c_block * input_channel_stride +
+            h * input_height_stride +
+            w * input_width_stride
+        )
+        input_ptrs = input_ptr + input_offset
+        total_mask = valid & channel_mask
+
+        current = tl.load(input_ptrs, mask=total_mask, other=min_value)
+        max_vals = tl.maximum(max_vals, current)
+    max_vals = tl.where(max_vals == min_value, 0.0, max_vals)
+
+    output_offset = (
+        n * output_batch_stride +
+        c_block * output_channel_stride +
+        oh * output_height_stride +
+        ow * output_width_stride
     )
-
-    current_max = tl.load(min_val_block_ptr, boundary_check=(0, 1, 2, 3))
-
-    for h_win in range(kernel_h):
-        h_in = h_start + h_win
-        h_ok = (h_in >= 0) & (h_in < H)
-
-        for w_win in range(kernel_w):
-            w_in = w_start + w_win
-            w_ok = (w_in >= 0) & (w_in < W)
-
-            if h_ok & w_ok:
-                input_block_ptr = tl.make_block_ptr(
-                    base=input_ptr,
-                    shape=(B, C, H, W),
-                    strides=(input_stride_b, input_stride_c, input_stride_h, input_stride_w),
-                    offsets=(batch_idx, channel_idx, h_in, w_in),
-                    block_shape=(1, 1, 1, 1),
-                    order=(3, 2, 1, 0),
-                )
-                val = tl.load(input_block_ptr, boundary_check=(0, 1, 2, 3))
-                current_max = tl.maximum(current_max, val)
-
-    output_block_ptr = tl.make_block_ptr(
-        base=output_ptr,
-        shape=(B, C, out_h, out_w),
-        strides=(output_stride_b, output_stride_c, output_stride_h, output_stride_w),
-        offsets=(batch_idx, channel_idx, h_out, w_out),
-        block_shape=(1, 1, 1, 1),
-        order=(3, 2, 1, 0),
-    )
-
-    tl.store(output_block_ptr, current_max, boundary_check=(3, 2, 1, 0))
-
-
+    output_ptrs = output_ptr + output_offset
+    tl.store(output_ptrs, max_vals, mask=channel_mask)
 
 def maxpool2d(
-    input,
-    kernel_size,
-    stride,
-    padding,
-):
-    if stride is None:
-        stride = kernel_size
+    input: torch.Tensor,
+    kernel_size: int,
+    stride: int = None,
+    padding: int = 0,
+    dilation: int = 1
+) -> torch.Tensor:
+    KH, KW = (kernel_size, kernel_size) if isinstance(kernel_size, int) else kernel_size
+    stride_h, stride_w = (stride, stride) if stride is None or isinstance(stride, int) else stride
+    pad_h, pad_w = (padding, padding) if isinstance(padding, int) else padding
+    dil_h, dil_w = (dilation, dilation) if isinstance(dilation, int) else dilation
+    N, C, IH, IW = input.shape
+    OH = (IH + 2 * pad_h - dil_h * (KH - 1) - 1) // stride_h + 1
+    OW = (IW + 2 * pad_w - dil_w * (KW - 1) - 1) // stride_w + 1
+    output = torch.empty((N, C, OH, OW), dtype=input.dtype, device=input.device)
 
-    if isinstance(kernel_size, int):
-        kernel_size = (kernel_size, kernel_size)
-    if isinstance(stride, int):
-        stride = (stride, stride)
-    if isinstance(padding, int):
-        padding = (padding, padding)
+    (input_batch_stride, input_channel_stride,
+     input_height_stride, input_width_stride) = input.stride()
 
-    kernel_h, kernel_w = kernel_size
-    stride_h, stride_w = stride
-    pad_h, pad_w = padding
+    (output_batch_stride, output_channel_stride,
+     output_height_stride, output_width_stride) = output.stride()
 
-    B, C, H, W = input.shape
-
-    out_h = (H + 2 * pad_h - kernel_h) // stride_h + 1
-    out_w = (W + 2 * pad_w - kernel_w) // stride_w + 1
-    assert out_h > 0 and out_w > 0, "Output dimensions must be positive"
-
-    output = torch.empty((B, C, out_h, out_w),
-                         device=input.device, dtype=input.dtype)
-
-    min_val = torch.full((1, 1, 1, 1), float('-inf'))
-
-    i_st = input.stride()
-    o_st = output.stride()
-    min_val_st = min_val.stride()
-    grid = (out_w, out_h, B * C)
+    BLOCK_SIZE_C = 128
+    num_blocks_c = (C + BLOCK_SIZE_C - 1) // BLOCK_SIZE_C
+    grid = (N * OH * OW * num_blocks_c,)
 
     maxpool2d_kernel[grid](
-        input,
-        output,
-        min_val,
-        B, C, H, W,
-        kernel_h, kernel_w,
+        input, output,
+        N, C, IH, IW, OH, OW,
+        KH, KW,
         stride_h, stride_w,
         pad_h, pad_w,
-        out_h, out_w,
-        i_st[0], i_st[1], i_st[2], i_st[3],
-        o_st[0], o_st[1], o_st[2], o_st[3],
-        min_val_st[0], min_val_st[1], min_val_st[2], min_val_st[3],
+        dil_h, dil_w,
+        input_batch_stride, input_channel_stride,
+        input_height_stride, input_width_stride,
+        output_batch_stride, output_channel_stride,
+        output_height_stride, output_width_stride,
+        BLOCK_SIZE_C,
     )
-
     return output
