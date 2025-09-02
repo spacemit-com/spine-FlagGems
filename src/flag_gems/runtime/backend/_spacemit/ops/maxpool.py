@@ -7,7 +7,7 @@ from flag_gems.utils.limits import get_dtype_min
 def maxpool2d_kernel(
     input_ptr,
     output_ptr,
-    N, C, IH, IW,
+    C, IH, IW,
     OH, OW,
     KH: tl.constexpr,
     KW: tl.constexpr,
@@ -25,22 +25,29 @@ def maxpool2d_kernel(
     output_channel_stride,
     output_height_stride,
     output_width_stride,
+    num_blocks_c,  # Added: Number of channel blocks
     BLOCK_SIZE_C: tl.constexpr,
 ):
-
     pid = tl.program_id(0)
-    n = pid // (OH * OW)
-    ohow = pid % (OH * OW)
-    oh = ohow // OW
-    ow = ohow % OW
-    c_block = tl.arange(0, BLOCK_SIZE_C)
+    # Combine batch, spatial, and channel block indices
+    block_c_index = pid % num_blocks_c
+    combined_n_oh_ow = pid // num_blocks_c
+
+    total_spatial = OH * OW
+    n = combined_n_oh_ow // total_spatial
+    oh_ow = combined_n_oh_ow % total_spatial
+    oh = oh_ow // OW
+    ow = oh_ow % OW
+
+    # Global channel indices for this block
+    c_base = block_c_index * BLOCK_SIZE_C
+    c_global = c_base + tl.arange(0, BLOCK_SIZE_C)
+    channel_mask = c_global < C
 
     window_h = oh * stride_h - pad_h
     window_w = ow * stride_w - pad_w
-
     min_value = get_dtype_min(input_ptr.type.element_ty)
     max_vals = tl.full((BLOCK_SIZE_C,), min_value, dtype=tl.float32)
-    channel_mask = c_block < C
 
     total_iters = KH * KW
     for k in range(total_iters):
@@ -52,23 +59,24 @@ def maxpool2d_kernel(
         valid_h = (h >= 0) & (h < IH)
         valid_w = (w >= 0) & (w < IW)
         valid = valid_h & valid_w
+        if valid:
+            # Use global channel indices
+            input_offset = (
+                n * input_batch_stride +
+                c_global * input_channel_stride +
+                h * input_height_stride +
+                w * input_width_stride
+            )
+            input_ptrs = input_ptr + input_offset
+            total_mask = valid & channel_mask
 
-        input_offset = (
-            n * input_batch_stride +
-            c_block * input_channel_stride +
-            h * input_height_stride +
-            w * input_width_stride
-        )
-        input_ptrs = input_ptr + input_offset
-        total_mask = valid & channel_mask
-
-        current = tl.load(input_ptrs, mask=total_mask, other=min_value)
-        max_vals = tl.maximum(max_vals, current)
+            current = tl.load(input_ptrs, mask=total_mask, other=min_value)
+            max_vals = tl.maximum(max_vals, current)
     max_vals = tl.where(max_vals == min_value, 0.0, max_vals)
 
     output_offset = (
         n * output_batch_stride +
-        c_block * output_channel_stride +
+        c_global * output_channel_stride +
         oh * output_height_stride +
         ow * output_width_stride
     )
@@ -83,9 +91,10 @@ def maxpool2d(
     dilation: int = 1
 ) -> torch.Tensor:
     KH, KW = (kernel_size, kernel_size) if isinstance(kernel_size, int) else kernel_size
-    stride_h, stride_w = (stride, stride) if stride is None or isinstance(stride, int) else stride
+    stride_h, stride_w = (stride, stride) if isinstance(stride, int) else stride
     pad_h, pad_w = (padding, padding) if isinstance(padding, int) else padding
     dil_h, dil_w = (dilation, dilation) if isinstance(dilation, int) else dilation
+
     N, C, IH, IW = input.shape
     OH = (IH + 2 * pad_h - dil_h * (KH - 1) - 1) // stride_h + 1
     OW = (IW + 2 * pad_w - dil_w * (KW - 1) - 1) // stride_w + 1
@@ -93,17 +102,17 @@ def maxpool2d(
 
     (input_batch_stride, input_channel_stride,
      input_height_stride, input_width_stride) = input.stride()
-
     (output_batch_stride, output_channel_stride,
      output_height_stride, output_width_stride) = output.stride()
 
-    BLOCK_SIZE_C = 128
+    BLOCK_SIZE_C = 64
     num_blocks_c = (C + BLOCK_SIZE_C - 1) // BLOCK_SIZE_C
-    grid = (N * OH * OW * num_blocks_c,)
+    total_programs = N * OH * OW * num_blocks_c
+    grid = (total_programs,)
 
     maxpool2d_kernel[grid](
         input, output,
-        N, C, IH, IW, OH, OW,
+        C, IH, IW, OH, OW,
         KH, KW,
         stride_h, stride_w,
         pad_h, pad_w,
@@ -112,6 +121,7 @@ def maxpool2d(
         input_height_stride, input_width_stride,
         output_batch_stride, output_channel_stride,
         output_height_stride, output_width_stride,
+        num_blocks_c,  # Pass num_blocks_c to kernel
         BLOCK_SIZE_C,
     )
     return output
