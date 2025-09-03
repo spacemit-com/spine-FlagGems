@@ -24,15 +24,19 @@ def ones_kernel(
 
     output_block_ptr = tl.make_block_ptr(
         base=output_ptr,
-        shape=(n_elements, ),
+        shape=(n_elements,),
         strides=(1,),
         offsets=(pid * BLOCK_SIZE,),
         block_shape=(BLOCK_SIZE,),
-        order=(0,)
+        order=(0,),
     )
     value = 1.0
 
-    tl.store(output_block_ptr, (value).to(output_block_ptr.dtype.element_ty), boundary_check=(0,))
+    tl.store(
+        output_block_ptr,
+        (value).to(output_block_ptr.dtype.element_ty),
+        boundary_check=(0,),
+    )
 
 
 def ones(size, *, dtype=None, layout=None, device=None, pin_memory=None):

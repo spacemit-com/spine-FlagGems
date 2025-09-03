@@ -43,7 +43,7 @@ def group_norm_kernel(
         strides=(1,),
         offsets=(pid,),
         block_shape=(1,),
-        order=(0,)
+        order=(0,),
     )
     Rstd_ptr = tl.make_block_ptr(
         base=Rstd,
@@ -51,7 +51,7 @@ def group_norm_kernel(
         strides=(1,),
         offsets=(pid,),
         block_shape=(1,),
-        order=(0,)
+        order=(0,),
     )
 
     X_ptr = tl.make_block_ptr(
@@ -60,7 +60,7 @@ def group_norm_kernel(
         strides=(HW, 1),
         offsets=(0, 0),
         block_shape=(BLOCK_GROUP_SIZE, BLOCK_HW_SIZE),
-        order=(1, 0)
+        order=(1, 0),
     )
 
     Y_ptr = tl.make_block_ptr(
@@ -69,7 +69,7 @@ def group_norm_kernel(
         strides=(HW, 1),
         offsets=(0, 0),
         block_shape=(BLOCK_GROUP_SIZE, BLOCK_HW_SIZE),
-        order=(1, 0)
+        order=(1, 0),
     )
 
     X_val = tl.load(X_ptr, boundary_check=(0, 1)).to(tl.float32)
@@ -89,7 +89,7 @@ def group_norm_kernel(
             strides=(1,),
             offsets=(0,),
             block_shape=(BLOCK_GROUP_SIZE,),
-            order=(0,)
+            order=(0,),
         )
         weight = tl.load(w_block_ptr, boundary_check=(0,))
         weight = tl.view(weight, (BLOCK_GROUP_SIZE, 1))
@@ -102,13 +102,15 @@ def group_norm_kernel(
             strides=(1,),
             offsets=(0,),
             block_shape=(BLOCK_GROUP_SIZE,),
-            order=(0,)
+            order=(0,),
         )
         bias = tl.load(b_block_ptr, boundary_check=(0,))
         bias = tl.view(bias, (BLOCK_GROUP_SIZE, 1))
     Y_val = x_hat * weight + bias
 
-    tl.store(Y_ptr, tl.view(Y_val, (BLOCK_GROUP_SIZE, BLOCK_HW_SIZE)), boundary_check=(0, 1))
+    tl.store(
+        Y_ptr, tl.view(Y_val, (BLOCK_GROUP_SIZE, BLOCK_HW_SIZE)), boundary_check=(0, 1)
+    )
     tl.store(Mean_ptr, mean)
     tl.store(Rstd_ptr, rstd)
 

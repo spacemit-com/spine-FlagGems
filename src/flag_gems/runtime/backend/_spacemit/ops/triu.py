@@ -33,7 +33,7 @@ def triu_kernel(
         strides=(N, 1),
         offsets=(row_start, 0),
         block_shape=(M_BLOCK_SIZE, N_BLOCK_SIZE),
-        order=(1, 0)
+        order=(1, 0),
     )
     y_block_ptr = tl.make_block_ptr(
         base=Y,
@@ -41,7 +41,7 @@ def triu_kernel(
         strides=(N, 1),
         offsets=(row_start, 0),
         block_shape=(M_BLOCK_SIZE, N_BLOCK_SIZE),
-        order=(1, 0)
+        order=(1, 0),
     )
 
     for n_offset in range(0, N, N_BLOCK_SIZE):
@@ -82,7 +82,7 @@ def triu_batch_kernel(
         strides=(MN, 1),
         offsets=(batch_id * BATCH_BLOCK_SIZE, mn_id * MN_BLOCK_SIZE),
         block_shape=(BATCH_BLOCK_SIZE, MN_BLOCK_SIZE),
-        order=(1, 0)
+        order=(1, 0),
     )
     y_ptr = tl.make_block_ptr(
         base=Y,
@@ -90,7 +90,7 @@ def triu_batch_kernel(
         strides=(MN, 1),
         offsets=(batch_id * BATCH_BLOCK_SIZE, mn_id * MN_BLOCK_SIZE),
         block_shape=(BATCH_BLOCK_SIZE, MN_BLOCK_SIZE),
-        order=(1, 0)
+        order=(1, 0),
     )
 
     x = tl.load(x_ptr, boundary_check=(0, 1))

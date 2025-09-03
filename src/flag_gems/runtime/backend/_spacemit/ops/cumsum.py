@@ -27,11 +27,11 @@ def scan_part_sum_kernel(
     pid = tl.program_id(0)
     inp_ptrs = tl.make_block_ptr(
         base=inp,
-        shape=(n_elements, ),
+        shape=(n_elements,),
         strides=(1,),
         offsets=(pid * BLOCK_SIZE,),
         block_shape=(BLOCK_SIZE,),
-        order=(0,)
+        order=(0,),
     )
 
     inp_vals = tl.load(inp_ptrs, boundary_check=(0,))
@@ -50,22 +50,22 @@ def scan_part_sum_kernel(
 
     out_ptrs = tl.make_block_ptr(
         base=out,
-        shape=(n_elements, ),
+        shape=(n_elements,),
         strides=(1,),
         offsets=(pid * BLOCK_SIZE,),
         block_shape=(BLOCK_SIZE,),
-        order=(0,)
+        order=(0,),
     )
 
     tl.store(out_ptrs, result, boundary_check=(0,))
 
     partial_sum_ptrs = tl.make_block_ptr(
         base=partial_sum,
-        shape=(part_num, ),
+        shape=(part_num,),
         strides=(1,),
         offsets=(pid,),
         block_shape=(1,),
-        order=(0,)
+        order=(0,),
     )
     tl.store(partial_sum_ptrs, part_sum_via_sum, boundary_check=(0,))
 

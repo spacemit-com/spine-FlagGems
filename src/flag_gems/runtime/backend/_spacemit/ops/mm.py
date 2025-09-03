@@ -1,8 +1,7 @@
-import logging
-
 import torch
 import triton
 import triton.language as tl
+
 
 @triton.jit
 def mm_kernel(
@@ -18,8 +17,8 @@ def mm_kernel(
     stride_bn,
     stride_cm,
     stride_cn,
-    BLOCK_SIZE_M: tl.constexpr = 32,
-    BLOCK_SIZE_N: tl.constexpr = 32,
+    BLOCK_SIZE_M: tl.constexpr = 128,
+    BLOCK_SIZE_N: tl.constexpr = 128,
     BLOCK_SIZE_K: tl.constexpr = 512,
     EVEN_K: tl.constexpr = 1,
 ):
@@ -73,8 +72,6 @@ def mm_kernel(
 
 
 def mm(a, b):
-    logging.debug("GEMS MM")
-    device = a.device
     # handle non-contiguous inputs if necessary
     if a.stride(0) > 1 and a.stride(1) > 1:
         a = a.contiguous()
@@ -85,25 +82,24 @@ def mm(a, b):
     M, K = a.shape
     _, N = b.shape
     # allocates output
-    c = torch.empty((M, N), device=device, dtype=a.dtype)
+    c = torch.empty((M, N), device=a.device, dtype=a.dtype)
     # launch kernel
     grid = lambda META: (
         triton.cdiv(M, META["BLOCK_SIZE_M"]),
         triton.cdiv(N, META["BLOCK_SIZE_N"]),
     )
-    with torch.device(a.device):
-        mm_kernel[grid](
-            a,
-            b,
-            c,
-            M,
-            N,
-            K,
-            a.stride(0),
-            a.stride(1),
-            b.stride(0),
-            b.stride(1),
-            c.stride(0),
-            c.stride(1),
-        )
+    mm_kernel[grid](
+        a,
+        b,
+        c,
+        M,
+        N,
+        K,
+        a.stride(0),
+        a.stride(1),
+        b.stride(0),
+        b.stride(1),
+        c.stride(0),
+        c.stride(1),
+    )
     return c

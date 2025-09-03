@@ -7,7 +7,7 @@ from torch import Tensor
 
 from flag_gems import runtime
 from flag_gems.runtime import torch_device_fn
-from flag_gems.utils import libentry, tl_extra_shim
+from flag_gems.utils import libentry
 
 logger = logging.getLogger(__name__)
 rsqrt = tl.rsqrt
@@ -85,7 +85,7 @@ def batch_norm_forward_kernel(
             strides=(input_batch_stride, input_spatial_stride),
             offsets=(0, 0),
             block_shape=(BLOCK_M, BLOCK_N),
-            order=(1, 0)
+            order=(1, 0),
         )
 
         for m_step in range(0, m_num_steps):
@@ -96,9 +96,13 @@ def batch_norm_forward_kernel(
                 batch_offset = m_step * BLOCK_M + tl.arange(0, BLOCK_M)
                 batch_mask = batch_offset < batch_dim
 
-                input_block_ptr = tl.advance(input_base_ptr, (m_step * BLOCK_M, n_step * BLOCK_N))
+                input_block_ptr = tl.advance(
+                    input_base_ptr, (m_step * BLOCK_M, n_step * BLOCK_N)
+                )
 
-                curr_input = tl.load(input_block_ptr, boundary_check=(0,1)).to(tl.float32)
+                curr_input = tl.load(input_block_ptr, boundary_check=(0, 1)).to(
+                    tl.float32
+                )
                 mask = batch_mask[:, None] & spatial_mask[None, :]
 
                 step = m_step * n_num_steps + n_step + 1
@@ -119,44 +123,43 @@ def batch_norm_forward_kernel(
 
         mean_ptr = tl.make_block_ptr(
             base=mean_pointer,
-            shape=(feat_dim, ),
+            shape=(feat_dim,),
             strides=(1,),
             offsets=(feat_pid,),
             block_shape=(1,),
-            order=(0,)
+            order=(0,),
         )
 
         tl.store(mean_ptr, mean, boundary_check=(0,))
 
         inv_std_ptr = tl.make_block_ptr(
             base=inv_std_pointer,
-            shape=(feat_dim, ),
+            shape=(feat_dim,),
             strides=(1,),
             offsets=(feat_pid,),
             block_shape=(1,),
-            order=(0,)
+            order=(0,),
         )
 
         tl.store(inv_std_ptr, inv_std, boundary_check=(0,))
 
         running_mean_ptr = tl.make_block_ptr(
             base=running_mean_pointer,
-            shape=(feat_dim, ),
+            shape=(feat_dim,),
             strides=(1,),
             offsets=(feat_pid,),
             block_shape=(1,),
-            order=(0,)
+            order=(0,),
         )
 
         running_var_ptr = tl.make_block_ptr(
             base=running_var_pointer,
-            shape=(feat_dim, ),
+            shape=(feat_dim,),
             strides=(1,),
             offsets=(feat_pid,),
             block_shape=(1,),
-            order=(0,)
+            order=(0,),
         )
-
 
         running_mean = tl.load(running_mean_ptr, boundary_check=(0,))
         running_var = tl.load(running_var_ptr, boundary_check=(0,))
@@ -171,21 +174,21 @@ def batch_norm_forward_kernel(
     else:
         mean_ptr = tl.make_block_ptr(
             base=running_mean_pointer,
-            shape=(feat_dim, ),
+            shape=(feat_dim,),
             strides=(1,),
             offsets=(feat_pid,),
             block_shape=(1,),
-            order=(0,)
+            order=(0,),
         )
         mean = tl.load(mean_ptr, boundary_check=(0,))
 
         running_var_ptr = tl.make_block_ptr(
             base=running_var_pointer,
-            shape=(feat_dim, ),
+            shape=(feat_dim,),
             strides=(1,),
             offsets=(feat_pid,),
             block_shape=(1,),
-            order=(0,)
+            order=(0,),
         )
         running_var = tl.load(running_var_ptr, boundary_check=(0,))
 
@@ -194,27 +197,27 @@ def batch_norm_forward_kernel(
     if weight_pointer:
         weight_ptr = tl.make_block_ptr(
             base=weight_pointer,
-            shape=(feat_dim, ),
+            shape=(feat_dim,),
             strides=(1,),
             offsets=(feat_pid,),
             block_shape=(1,),
-            order=(0,)
+            order=(0,),
         )
         weight = tl.load(weight_ptr, boundary_check=(0,)).to(tl.float32)
     else:
-        weight = tl.full( (1,), 1.0, dtype=tl.float32 )
+        weight = tl.full((1,), 1.0, dtype=tl.float32)
     if bias_pointer:
         bias_ptr = tl.make_block_ptr(
             base=bias_pointer,
-            shape=(feat_dim, ),
+            shape=(feat_dim,),
             strides=(1,),
             offsets=(feat_pid,),
             block_shape=(1,),
-            order=(0,)
+            order=(0,),
         )
         bias = tl.load(bias_ptr, boundary_check=(0,)).to(tl.float32)
     else:
-        bias = tl.full( (1,), 0.0, dtype=tl.float32 )
+        bias = tl.full((1,), 0.0, dtype=tl.float32)
 
     input_base_ptr = tl.make_block_ptr(
         base=input_pointer + input_feat_stride * feat_pid,
@@ -222,16 +225,16 @@ def batch_norm_forward_kernel(
         strides=(input_batch_stride, input_spatial_stride),
         offsets=(0, 0),
         block_shape=(BLOCK_M, BLOCK_N),
-        order=(1, 0)
+        order=(1, 0),
     )
 
-    output_base_ptr  = tl.make_block_ptr(
+    output_base_ptr = tl.make_block_ptr(
         base=output_pointer + output_feat_stride * feat_pid,
         shape=(batch_dim, spatial_dim),
         strides=(output_batch_stride, output_spatial_stride),
         offsets=(0, 0),
         block_shape=(BLOCK_M, BLOCK_N),
-        order=(1, 0)
+        order=(1, 0),
     )
 
     for m_step in range(0, tl.cdiv(batch_dim, BLOCK_M)):
@@ -242,14 +245,18 @@ def batch_norm_forward_kernel(
             spatial_offset = n_step * BLOCK_N + tl.arange(0, BLOCK_N)
             spatial_mask = spatial_offset < spatial_dim
 
-            input_block_ptr = tl.advance(input_base_ptr, (m_step * BLOCK_M, n_step * BLOCK_N))
-            output_block_ptr = tl.advance(output_base_ptr, (m_step * BLOCK_M, n_step * BLOCK_N))
+            input_block_ptr = tl.advance(
+                input_base_ptr, (m_step * BLOCK_M, n_step * BLOCK_N)
+            )
+            output_block_ptr = tl.advance(
+                output_base_ptr, (m_step * BLOCK_M, n_step * BLOCK_N)
+            )
 
-            curr_input = tl.load(input_block_ptr, boundary_check=(0,1)).to(tl.float32)
+            curr_input = tl.load(input_block_ptr, boundary_check=(0, 1)).to(tl.float32)
 
             output = weight * (curr_input - mean) * inv_std + bias
 
-            tl.store(output_block_ptr, output, boundary_check=(0,1))
+            tl.store(output_block_ptr, output, boundary_check=(0, 1))
 
 
 def batch_norm(

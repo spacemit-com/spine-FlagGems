@@ -27,7 +27,7 @@ def l2_norm_kernel(X, Out, M, N, BLOCK_M: tl.constexpr, BLOCK_N: tl.constexpr):
         base=X,
         shape=[M, N],
         strides=[N, 1],
-        offsets=[pid*BLOCK_M,0],
+        offsets=[pid * BLOCK_M, 0],
         block_shape=[BLOCK_M, BLOCK_N],
         order=[1, 0],
     )
@@ -36,9 +36,9 @@ def l2_norm_kernel(X, Out, M, N, BLOCK_M: tl.constexpr, BLOCK_N: tl.constexpr):
         base=Out,
         shape=(M, 1),
         strides=(1, 1),
-        offsets=(pid*BLOCK_M, 0),
+        offsets=(pid * BLOCK_M, 0),
         block_shape=(BLOCK_M, 1),
-        order=(1, 0)
+        order=(1, 0),
     )
 
     _sum = tl.zeros([BLOCK_M, BLOCK_N], dtype=tl.float32)

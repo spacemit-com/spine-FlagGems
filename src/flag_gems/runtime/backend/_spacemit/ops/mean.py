@@ -10,6 +10,7 @@ from flag_gems.runtime import torch_device_fn
 from flag_gems.utils import dim_compress, libentry
 from flag_gems.utils import triton_lang_extension as tle
 
+
 @libentry()
 @triton.jit
 def mean_kernel_1(
@@ -62,29 +63,31 @@ def mean(inp, *, dtype=None):
     configs=runtime.get_tuned_config("mean"),
     key=["M", "N"],
 )
-
 @triton.jit
 def mean_dim_kernel(X, Mean, M, N, TILE_N: tl.constexpr):
 
     row = tl.program_id(0)
     X = X + row * N
     Mean = Mean + row
-    _mean = 0.
+    _mean = 0.0
 
     num_pid_n = tl.cdiv(N, TILE_N)
 
     x_ptr_desc = tl.make_block_ptr(
-            base=X,
-            shape=[N],
-            strides=[1],
-            offsets=[0],
-            block_shape=[TILE_N],
-            order=[0],
-        )
+        base=X,
+        shape=[N],
+        strides=[1],
+        offsets=[0],
+        block_shape=[TILE_N],
+        order=[0],
+    )
 
     for off_n in range(0, num_pid_n):
 
-        a = tl.load(x_ptr_desc, boundary_check=[0],)
+        a = tl.load(
+            x_ptr_desc,
+            boundary_check=[0],
+        )
 
         _mean += tl.sum(a)
 
@@ -121,6 +124,7 @@ def mean_dim(x, dim, keepdim=False, *, dtype=None):
     if not keepdim:
         out = out.squeeze(dim)
     return out
+
 
 def global_avg_pool(x, _output_size=None):
     return mean_dim(x, dim=[2, 3], keepdim=True)

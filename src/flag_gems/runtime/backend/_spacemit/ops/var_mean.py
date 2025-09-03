@@ -44,7 +44,7 @@ def var_mean_welford_kernel(
         base=X,
         shape=[M, N],
         strides=[N, 1],
-        offsets=[pid*BLOCK_M,0],
+        offsets=[pid * BLOCK_M, 0],
         block_shape=[BLOCK_M, BLOCK_N],
         order=[1, 0],
     )
@@ -52,17 +52,17 @@ def var_mean_welford_kernel(
         base=Var,
         shape=(M, 1),
         strides=(1, 1),
-        offsets=(pid*BLOCK_M, 0),
+        offsets=(pid * BLOCK_M, 0),
         block_shape=(BLOCK_M, 1),
-        order=(1, 0)
+        order=(1, 0),
     )
     mean_block_ptr = tl.make_block_ptr(
         base=Mean,
         shape=(M, 1),
         strides=(1, 1),
-        offsets=(pid*BLOCK_M, 0),
+        offsets=(pid * BLOCK_M, 0),
         block_shape=(BLOCK_M, 1),
-        order=(1, 0)
+        order=(1, 0),
     )
 
     _mean = tl.zeros([BLOCK_M, BLOCK_N], dtype=tl.float32)

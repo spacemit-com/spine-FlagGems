@@ -12,19 +12,30 @@ from flag_gems.utils import libentry, libtuner
     configs=runtime.get_tuned_config("im2col"),
     key=["IH", "IW", "OH", "OW", "KH", "KW"],
 )
-
 @triton.jit
 def im2col_kernel(
     input_ptr,
     output_ptr,
-    N, C, IH, IW,
-    KH, KW,
-    stride_h, stride_w,
-    pad_h, pad_w,
-    dilation_h, dilation_w,
-    OH, OW,
-    input_batch_stride, input_height_stride, input_width_stride, input_channel_stride,
-    output_row_stride, output_col_stride,
+    N,
+    C,
+    IH,
+    IW,
+    KH,
+    KW,
+    stride_h,
+    stride_w,
+    pad_h,
+    pad_w,
+    dilation_h,
+    dilation_w,
+    OH,
+    OW,
+    input_batch_stride,
+    input_height_stride,
+    input_width_stride,
+    input_channel_stride,
+    output_row_stride,
+    output_col_stride,
     BLOCK_SIZE_C: tl.constexpr,
 ):
     pid = tl.program_id(0)
@@ -40,10 +51,15 @@ def im2col_kernel(
     input_block_ptr = tl.make_block_ptr(
         base=input_ptr,
         shape=(N, IH, IW, C),
-        strides=(input_batch_stride, input_height_stride, input_width_stride, input_channel_stride),
+        strides=(
+            input_batch_stride,
+            input_height_stride,
+            input_width_stride,
+            input_channel_stride,
+        ),
         offsets=(n, 0, 0, 0),
         block_shape=(1, 1, 1, BLOCK_SIZE_C),
-        order=(3, 2, 1, 0)
+        order=(3, 2, 1, 0),
     )
 
     output_block_ptr = tl.make_block_ptr(
@@ -52,7 +68,7 @@ def im2col_kernel(
         strides=(output_row_stride, output_col_stride),
         offsets=(pid, 0),
         block_shape=(1, BLOCK_SIZE_C),
-        order=(1, 0)
+        order=(1, 0),
     )
 
     for kh in range(KH):
@@ -73,18 +89,14 @@ def im2col_kernel(
                     input_block_ptr_c = tl.advance(input_block_ptr, (0, h, w, c_start))
                     vals = tl.load(
                         input_block_ptr_c,
-                        boundary_check=(0,1,2,3),
+                        boundary_check=(0, 1, 2, 3),
                     )
                     vals = tl.reshape(vals, (1, BLOCK_SIZE_C))
                 else:
                     vals = tl.zeros((1, BLOCK_SIZE_C), dtype=tl.float32)
                 output_block_ptr_final = tl.advance(output_block_ptr_col, (0, c_start))
 
-                tl.store(
-                    output_block_ptr_final,
-                    vals,
-                    boundary_check=(0,1)
-                )
+                tl.store(output_block_ptr_final, vals, boundary_check=(0, 1))
 
 
 def im2col(input, N, C, IH, IW, KH, KW, stride, padding, dilation):
@@ -98,37 +110,45 @@ def im2col(input, N, C, IH, IW, KH, KW, stride, padding, dilation):
     GEMM_M = N * OH * OW
     GEMM_N = C * KH * KW
 
-    im2col_input = torch.empty(
-        (GEMM_M, GEMM_N),
-        dtype=input.dtype,
-        device=input.device
-    )
+    im2col_input = torch.empty((GEMM_M, GEMM_N), dtype=input.dtype, device=input.device)
 
     grid = (N * OH * OW,)
 
-    input = input.permute(0,2,3,1).contiguous()
+    input = input.permute(0, 2, 3, 1).contiguous()
 
     im2col_kernel[grid](
         input,
         im2col_input,
-        N, C, IH, IW,
-        KH, KW,
-        str_h, str_w,
-        pad_h, pad_w,
-        dil_h, dil_w,
-        OH, OW,
-        input.stride(0), input.stride(1), input.stride(2), input.stride(3),
-        im2col_input.stride(0), im2col_input.stride(1),
+        N,
+        C,
+        IH,
+        IW,
+        KH,
+        KW,
+        str_h,
+        str_w,
+        pad_h,
+        pad_w,
+        dil_h,
+        dil_w,
+        OH,
+        OW,
+        input.stride(0),
+        input.stride(1),
+        input.stride(2),
+        input.stride(3),
+        im2col_input.stride(0),
+        im2col_input.stride(1),
     )
 
     return im2col_input
+
 
 @libentry()
 @libtuner(
     configs=runtime.get_tuned_config("bmm"),
     key=["M", "N", "K"],
 )
-
 @triton.heuristics(runtime.get_heuristic_config("bmm"))
 @triton.jit
 def bmm_kernel(
@@ -161,14 +181,11 @@ def bmm_kernel(
     if GROUP_M == 1:
         pid_m, pid_n = pidx, pidy
 
-
     block_m = pid_m * TILE_M
     block_n = pid_n * TILE_N
 
-
     offset_a = pid_b * stride_ab
     offset_o = pid_b * stride_cb
-
 
     a_ptr = tl.make_block_ptr(
         A + offset_a,
@@ -197,9 +214,7 @@ def bmm_kernel(
         order=(1, 0),
     )
 
-
     acc = tl.zeros((TILE_N, TILE_M), dtype=tl.float32)
-
 
     if DIVISIBLE_K:
         for k in range(0, K, TILE_K):
@@ -216,7 +231,6 @@ def bmm_kernel(
         acc += tl.dot(b_tile, tl.trans(a_tile))
 
     c = acc.to(dot_out_dtype)
-
 
     tl.store(o_ptr, c, boundary_check=(0, 1))
 
@@ -286,11 +300,18 @@ class Conv2d(torch.autograd.Function):
         Q = (W + 2 * pad_w - dil_w * (S - 1) - 1) // str_w + 1
 
         # [N*P*Q, IC*R*S]
-        input_col = im2col(input, N, C, H, W, R, S, (str_h, str_w), (pad_h, pad_w), (dil_h, dil_w))
-        input_col = input_col.view(N*P*Q,R*S,C).permute(0,2,1).contiguous().view(N*P*Q,C*R*S)
+        input_col = im2col(
+            input, N, C, H, W, R, S, (str_h, str_w), (pad_h, pad_w), (dil_h, dil_w)
+        )
+        input_col = (
+            input_col.view(N * P * Q, R * S, C)
+            .permute(0, 2, 1)
+            .contiguous()
+            .view(N * P * Q, C * R * S)
+        )
 
         # [N, P*Q, IC*R*S]
-        input_col = input_col.view(N, P*Q, C*R*S)
+        input_col = input_col.view(N, P * Q, C * R * S)
 
         # [1, OC, IC*R*S]
         weight = weight.view(1, OC, -1)
@@ -310,9 +331,11 @@ class Conv2d(torch.autograd.Function):
     def backward(ctx, grad_output):
         pass
 
+
 def conv2d(input, weight, bias=None, padding=0, stride=1, dilation=1, groups=1):
     return Conv2d.apply(input, weight, bias, padding, stride, dilation, groups)
 
+
 def thnn_conv2d(input, weight, kernel_size=0, bias=None, stride=1, padding=0, groups=1):
-    dilation=1
+    dilation = 1
     return Conv2d.apply(input, weight, bias, padding, stride, dilation, groups)

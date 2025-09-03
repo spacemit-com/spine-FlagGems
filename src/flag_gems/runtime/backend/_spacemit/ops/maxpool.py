@@ -3,12 +3,16 @@ import triton
 import triton.language as tl
 from flag_gems.utils.limits import get_dtype_min
 
+
 @triton.jit
 def maxpool2d_kernel(
     input_ptr,
     output_ptr,
-    C, IH, IW,
-    OH, OW,
+    C,
+    IH,
+    IW,
+    OH,
+    OW,
     KH: tl.constexpr,
     KW: tl.constexpr,
     stride_h: tl.constexpr,
@@ -62,10 +66,10 @@ def maxpool2d_kernel(
         if valid:
             # Use global channel indices
             input_offset = (
-                n * input_batch_stride +
-                c_global * input_channel_stride +
-                h * input_height_stride +
-                w * input_width_stride
+                n * input_batch_stride
+                + c_global * input_channel_stride
+                + h * input_height_stride
+                + w * input_width_stride
             )
             input_ptrs = input_ptr + input_offset
             total_mask = valid & channel_mask
@@ -75,20 +79,21 @@ def maxpool2d_kernel(
     max_vals = tl.where(max_vals == min_value, 0.0, max_vals)
 
     output_offset = (
-        n * output_batch_stride +
-        c_global * output_channel_stride +
-        oh * output_height_stride +
-        ow * output_width_stride
+        n * output_batch_stride
+        + c_global * output_channel_stride
+        + oh * output_height_stride
+        + ow * output_width_stride
     )
     output_ptrs = output_ptr + output_offset
     tl.store(output_ptrs, max_vals, mask=channel_mask)
+
 
 def maxpool2d(
     input: torch.Tensor,
     kernel_size: int,
     stride: int = None,
     padding: int = 0,
-    dilation: int = 1
+    dilation: int = 1,
 ) -> torch.Tensor:
     KH, KW = (kernel_size, kernel_size) if isinstance(kernel_size, int) else kernel_size
     stride_h, stride_w = (stride, stride) if isinstance(stride, int) else stride
@@ -100,10 +105,18 @@ def maxpool2d(
     OW = (IW + 2 * pad_w - dil_w * (KW - 1) - 1) // stride_w + 1
     output = torch.empty((N, C, OH, OW), dtype=input.dtype, device=input.device)
 
-    (input_batch_stride, input_channel_stride,
-     input_height_stride, input_width_stride) = input.stride()
-    (output_batch_stride, output_channel_stride,
-     output_height_stride, output_width_stride) = output.stride()
+    (
+        input_batch_stride,
+        input_channel_stride,
+        input_height_stride,
+        input_width_stride,
+    ) = input.stride()
+    (
+        output_batch_stride,
+        output_channel_stride,
+        output_height_stride,
+        output_width_stride,
+    ) = output.stride()
 
     BLOCK_SIZE_C = 64
     num_blocks_c = (C + BLOCK_SIZE_C - 1) // BLOCK_SIZE_C
@@ -111,16 +124,29 @@ def maxpool2d(
     grid = (total_programs,)
 
     maxpool2d_kernel[grid](
-        input, output,
-        C, IH, IW, OH, OW,
-        KH, KW,
-        stride_h, stride_w,
-        pad_h, pad_w,
-        dil_h, dil_w,
-        input_batch_stride, input_channel_stride,
-        input_height_stride, input_width_stride,
-        output_batch_stride, output_channel_stride,
-        output_height_stride, output_width_stride,
+        input,
+        output,
+        C,
+        IH,
+        IW,
+        OH,
+        OW,
+        KH,
+        KW,
+        stride_h,
+        stride_w,
+        pad_h,
+        pad_w,
+        dil_h,
+        dil_w,
+        input_batch_stride,
+        input_channel_stride,
+        input_height_stride,
+        input_width_stride,
+        output_batch_stride,
+        output_channel_stride,
+        output_height_stride,
+        output_width_stride,
         num_blocks_c,  # Pass num_blocks_c to kernel
         BLOCK_SIZE_C,
     )

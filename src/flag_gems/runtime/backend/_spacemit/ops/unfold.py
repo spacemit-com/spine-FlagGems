@@ -2,14 +2,24 @@ import torch
 import triton
 import triton.language as tl
 
+
 @triton.jit
 def _unfold_kernel(
-    in_ptr, out_ptr,
-    N: int, C: int, H: int, W: int,
-    kh: int, kw: int,
-    stride: int, padding: int, dilation: int,
-    H_out: int, W_out: int, L: int,
-    BLOCK_L: tl.constexpr
+    in_ptr,
+    out_ptr,
+    N: int,
+    C: int,
+    H: int,
+    W: int,
+    kh: int,
+    kw: int,
+    stride: int,
+    padding: int,
+    dilation: int,
+    H_out: int,
+    W_out: int,
+    L: int,
+    BLOCK_L: tl.constexpr,
 ):
 
     pid_n = tl.program_id(2)
@@ -44,7 +54,7 @@ def unfold(
     kernel_size: tuple,
     stride: int = 1,
     dilation: int = 1,
-    padding: int = 0
+    padding: int = 0,
 ) -> torch.Tensor:
     assert len(input.shape) == 4, "input must be 4D tensor(N, C, H, W)"
     assert len(kernel_size) == 2, "kernel_size should be (height, width)"
@@ -56,14 +66,25 @@ def unfold(
     W_out = (W + 2 * padding - dilation * (kw - 1) - 1) // stride + 1
     L = H_out * W_out
 
-    output = torch.empty((N, C * kh * kw, L),
-                         device=input.device,
-                         dtype=input.dtype)
+    output = torch.empty((N, C * kh * kw, L), device=input.device, dtype=input.dtype)
 
     grid = lambda meta: (triton.cdiv(L, meta["BLOCK_L"]), C * kh * kw, N)
 
     _unfold_kernel[grid](
-        input, output, N, C, H, W, kh, kw, stride, padding, dilation, H_out, W_out, L,
-        BLOCK_L=triton.next_power_of_2(L)
+        input,
+        output,
+        N,
+        C,
+        H,
+        W,
+        kh,
+        kw,
+        stride,
+        padding,
+        dilation,
+        H_out,
+        W_out,
+        L,
+        BLOCK_L=triton.next_power_of_2(L),
     )
     return output

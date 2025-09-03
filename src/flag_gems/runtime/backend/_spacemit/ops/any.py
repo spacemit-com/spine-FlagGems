@@ -68,21 +68,21 @@ def any_kernel_1(
     pid = tl.program_id(0)
     inp_ptrs = tl.make_block_ptr(
         base=inp,
-        shape=(n_elements, ),
+        shape=(n_elements,),
         strides=(1,),
         offsets=(pid * BLOCK_SIZE,),
         block_shape=(BLOCK_SIZE,),
-        order=(0,)
+        order=(0,),
     )
     inp_val = tl.load(inp_ptrs, boundary_check=(0,))
     any_val = tl.reduce(inp_val != 0, axis=0, combine_fn=reduce_any)
     mid_ptr = tl.make_block_ptr(
         base=mid,
-        shape=(mid_size, ),
+        shape=(mid_size,),
         strides=(1,),
         offsets=(pid,),
         block_shape=(1,),
-        order=(0,)
+        order=(0,),
     )
     tl.store(mid_ptr, any_val.to(tl.int8), boundary_check=(0,))
 
@@ -92,21 +92,16 @@ def any_kernel_1(
 def any_kernel_2(mid, out, MID_SIZE, BLOCK_MID: tl.constexpr):
     mid_ptrs = tl.make_block_ptr(
         base=mid,
-        shape=(MID_SIZE, ),
+        shape=(MID_SIZE,),
         strides=(1,),
         offsets=(0,),
         block_shape=(BLOCK_MID,),
-        order=(0,)
+        order=(0,),
     )
     mid_val = tl.load(mid_ptrs, boundary_check=(0,)).to(tl.int1)
-    any_val = tl.reduce(mid_val , axis=0, combine_fn=reduce_any)
+    any_val = tl.reduce(mid_val, axis=0, combine_fn=reduce_any)
     out_ptr = tl.make_block_ptr(
-        base=out,
-        shape=(1, ),
-        strides=(1,),
-        offsets=(0,),
-        block_shape=(1,),
-        order=(0,)
+        base=out, shape=(1,), strides=(1,), offsets=(0,), block_shape=(1,), order=(0,)
     )
     tl.store(out_ptr, any_val.to(tl.int8), boundary_check=(0,))
 
