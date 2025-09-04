@@ -25,10 +25,12 @@ from .multinomial import multinomial
 from .sort import sort
 from .unfold import unfold
 from .triu import triu
+from .argmax import argmax
 
 __all__ = [
            "any",
            "addmm",
+           "argmax",
            "batch_norm",
            "bmm",
            "conv2d",
