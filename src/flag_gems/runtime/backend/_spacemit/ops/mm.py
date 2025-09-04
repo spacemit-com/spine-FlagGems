@@ -17,10 +17,10 @@ def mm_kernel(
     stride_bn,
     stride_cm,
     stride_cn,
-    BLOCK_SIZE_M: tl.constexpr = 128,
-    BLOCK_SIZE_N: tl.constexpr = 128,
-    BLOCK_SIZE_K: tl.constexpr = 512,
-    EVEN_K: tl.constexpr = 1,
+    BLOCK_SIZE_M: tl.constexpr,
+    BLOCK_SIZE_N: tl.constexpr,
+    BLOCK_SIZE_K: tl.constexpr,
+    EVEN_K: tl.constexpr,
 ):
     pid_m = tl.program_id(0)
     pid_n = tl.program_id(1)
@@ -88,6 +88,11 @@ def mm(a, b):
         triton.cdiv(M, META["BLOCK_SIZE_M"]),
         triton.cdiv(N, META["BLOCK_SIZE_N"]),
     )
+    BLOCK_SIZE_M = 128
+    BLOCK_SIZE_N = 128
+    BLOCK_SIZE_K = triton.next_power_of_2(K)
+    EVEN_K = 1
+
     mm_kernel[grid](
         a,
         b,
@@ -101,5 +106,9 @@ def mm(a, b):
         b.stride(1),
         c.stride(0),
         c.stride(1),
+        BLOCK_SIZE_M=BLOCK_SIZE_M,
+        BLOCK_SIZE_N=BLOCK_SIZE_N,
+        BLOCK_SIZE_K=BLOCK_SIZE_K,
+        EVEN_K=EVEN_K,
     )
     return c

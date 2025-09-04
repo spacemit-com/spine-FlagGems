@@ -4,20 +4,11 @@ import torch
 import triton
 import triton.language as tl
 
-from flag_gems import runtime
 from flag_gems.runtime import torch_device_fn
-from flag_gems.utils import libentry, libtuner
 
 logger = logging.getLogger(__name__)
 
 
-@libentry()
-@libtuner(
-    configs=runtime.get_tuned_config("bmm"),
-    key=["M", "N", "K"],
-    strategy=["log", "log", "log"],
-)
-@triton.heuristics(runtime.get_heuristic_config("bmm"))
 @triton.jit
 def bmm_kernel(
     A,
@@ -25,7 +16,7 @@ def bmm_kernel(
     O,
     M,
     N,
-    K,  # Matrices and dimensions
+    K,
     stride_ab,
     stride_am,
     stride_ak,
@@ -35,32 +26,29 @@ def bmm_kernel(
     stride_cb,
     stride_cm,
     stride_cn,
-    TILE_M: tl.constexpr,  # Tile size in M dimension
-    TILE_N: tl.constexpr,  # Tile size in N dimension
-    TILE_K: tl.constexpr,  # Tile size in K dimension
-    GROUP_M: tl.constexpr,  # Grouping factor for M dimension
-    DIVISIBLE_K: tl.constexpr,  # Whether K is divisible by TILE_K
+    TILE_M: tl.constexpr,
+    TILE_N: tl.constexpr,
+    TILE_K: tl.constexpr,
+    GROUP_M: tl.constexpr,
+    DIVISIBLE_K: tl.constexpr,
 ):
-    # Program ID for each block in the grid
+
     pidx = tl.program_id(0)
     pidy = tl.program_id(1)
-    pid_b = tl.program_id(2)  # Block ID in the batch dimension
+    pid_b = tl.program_id(2)
 
     if GROUP_M == 1:
         pid_m, pid_n = pidx, pidy
 
-    # Compute the starting location of the current block
     block_m = pid_m * TILE_M
     block_n = pid_n * TILE_N
 
-    # Offsets for the current batch
     offset_a = pid_b * stride_ab
     offset_b = pid_b * stride_bb
     offset_o = pid_b * stride_cb
 
-    # Create pointers to the input matrices with tiling
     a_ptr = tl.make_block_ptr(
-        A + offset_a,  # Adjust for batch offset
+        A + offset_a,
         shape=(M, K),
         strides=(stride_am, stride_ak),
         offsets=(block_m, 0),
@@ -69,7 +57,7 @@ def bmm_kernel(
     )
 
     b_ptr = tl.make_block_ptr(
-        B + offset_b,  # Adjust for batch offset
+        B + offset_b,
         shape=(K, N),
         strides=(stride_bk, stride_bn),
         offsets=(0, block_n),
@@ -78,7 +66,7 @@ def bmm_kernel(
     )
 
     o_ptr = tl.make_block_ptr(
-        O + offset_o,  # Adjust for batch offset
+        O + offset_o,
         shape=(M, N),
         strides=(stride_cm, stride_cn),
         offsets=(block_m, block_n),
@@ -86,10 +74,8 @@ def bmm_kernel(
         order=(1, 0),
     )
 
-    # Accumulator for partial results
     acc = tl.zeros((TILE_M, TILE_N), dtype=tl.float32)
 
-    # Loop over K dimension in tiles
     if DIVISIBLE_K:
         for k in range(0, K, TILE_K):
             a_tile = tl.load(a_ptr, boundary_check=(0, 1))
@@ -106,7 +92,6 @@ def bmm_kernel(
 
     c = acc.to(o_ptr.dtype.element_ty)
 
-    # Write the final result to the output matrix
     tl.store(o_ptr, c, boundary_check=(0, 1))
 
 
@@ -125,6 +110,11 @@ def bmm(A, B):
         triton.cdiv(meta["N"], meta["TILE_N"]),
         batch,
     )
+    TILE_M = 128
+    TILE_N = 128
+    TILE_K = triton.next_power_of_2(K)
+    GROUP_M = 1
+    DIVISIBLE_K = 0
     with torch_device_fn.device(A.device):
         bmm_kernel[grid_fn](
             A,
@@ -142,5 +132,10 @@ def bmm(A, B):
             out.stride(0),
             out.stride(1),
             out.stride(2),
+            TILE_M=TILE_M,
+            TILE_N=TILE_N,
+            TILE_K=TILE_K,
+            GROUP_M=GROUP_M,
+            DIVISIBLE_K=DIVISIBLE_K,
         )
     return out

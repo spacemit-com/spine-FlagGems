@@ -144,12 +144,6 @@ def im2col(input, N, C, IH, IW, KH, KW, stride, padding, dilation):
     return im2col_input
 
 
-@libentry()
-@libtuner(
-    configs=runtime.get_tuned_config("bmm"),
-    key=["M", "N", "K"],
-)
-@triton.heuristics(runtime.get_heuristic_config("bmm"))
 @triton.jit
 def bmm_kernel(
     A,
@@ -166,7 +160,6 @@ def bmm_kernel(
     stride_cb,
     stride_cn,
     stride_cm,
-    dot_out_dtype: tl.constexpr,
     TILE_M: tl.constexpr,
     TILE_N: tl.constexpr,
     TILE_K: tl.constexpr,
@@ -230,7 +223,7 @@ def bmm_kernel(
         b_tile = tl.load(b_ptr, boundary_check=(0, 1))
         acc += tl.dot(b_tile, tl.trans(a_tile))
 
-    c = acc.to(dot_out_dtype)
+    c = acc.to(o_ptr.dtype.element_ty)
 
     tl.store(o_ptr, c, boundary_check=(0, 1))
 
@@ -245,13 +238,17 @@ def bmm(A, B):
         B = B.contiguous()
 
     out = torch.empty((batch, N, M), dtype=A.dtype, device=A.device)
-    dot_out_dtype = tl.float32
 
     grid_fn = lambda meta: (
         triton.cdiv(meta["M"], meta["TILE_M"]),
         triton.cdiv(meta["N"], meta["TILE_N"]),
         batch,
     )
+    TILE_M = 128
+    TILE_N = 128
+    TILE_K = triton.next_power_of_2(K)
+    GROUP_M = 1
+    DIVISIBLE_K = 0
     with torch_device_fn.device(A.device):
         bmm_kernel[grid_fn](
             A,
@@ -268,7 +265,11 @@ def bmm(A, B):
             out.stride(0),
             out.stride(1),
             out.stride(2),
-            dot_out_dtype=dot_out_dtype,
+            TILE_M=TILE_M,
+            TILE_N=TILE_N,
+            TILE_K=TILE_K,
+            GROUP_M=GROUP_M,
+            DIVISIBLE_K=DIVISIBLE_K,
         )
     return out
 

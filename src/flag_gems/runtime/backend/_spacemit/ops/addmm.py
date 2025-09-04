@@ -4,16 +4,7 @@ import torch
 import triton
 import triton.language as tl
 
-from flag_gems import runtime
-from flag_gems.utils import libentry
 
-
-@libentry()
-@triton.autotune(
-    configs=runtime.get_tuned_config("addmm"),
-    key=["M", "N", "K"],
-)
-@triton.heuristics(runtime.get_heuristic_config("mm"))
 @triton.jit(do_not_specialize=["alpha", "beta"])
 def addmm_kernel(
     a_ptr,
@@ -113,6 +104,10 @@ def addmm(bias, mat1, mat2, *, beta=1, alpha=1):
         triton.cdiv(M, META["BLOCK_SIZE_M"]),
         triton.cdiv(N, META["BLOCK_SIZE_N"]),
     )
+    BLOCK_SIZE_M = 128
+    BLOCK_SIZE_N = 128
+    BLOCK_SIZE_K = triton.next_power_of_2(K)
+    EVEN_K = 1
     with torch.device(mat1.device):
         addmm_kernel[grid](
             mat1,
@@ -132,5 +127,9 @@ def addmm(bias, mat1, mat2, *, beta=1, alpha=1):
             bias.stride(1),
             out.stride(0),
             out.stride(1),
+            BLOCK_SIZE_M=BLOCK_SIZE_M,
+            BLOCK_SIZE_N=BLOCK_SIZE_N,
+            BLOCK_SIZE_K=BLOCK_SIZE_K,
+            EVEN_K=EVEN_K,
         )
     return out
