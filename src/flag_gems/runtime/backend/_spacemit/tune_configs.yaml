@@ -47,9 +47,15 @@ log_softmax:
     BLOCK_N: 512
 mm:
 - META:
-    BLOCK_SIZE_M: 16
-    BLOCK_SIZE_N: 16
-    BLOCK_SIZE_K: 8192
+    BLOCK_SIZE_M: 128
+    BLOCK_SIZE_N: 256
+    mr: 16
+    nr: 16
+    mt: 1
+    nt: 1
+    mb: 8
+    nb: 8
+    kb: 8
 softmax_non_inner:
 - META:
     TILE_K: 32
