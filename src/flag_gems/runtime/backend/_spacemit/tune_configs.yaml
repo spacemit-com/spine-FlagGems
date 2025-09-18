@@ -17,10 +17,15 @@ attention:
   - false
 bmm:
 - META:
-    TILE_M: 16
-    TILE_N: 16
-    TILE_K: 8192
-    GROUP_M: 1
+    TILE_M: 128
+    TILE_N: 256
+    mr: 48
+    nr: 512
+    mt: 3
+    nt: 1
+    mb: 8
+    nb: 16
+    kb: 8
 argmax:
 - META:
     BLOCK_M: 8
@@ -49,12 +54,12 @@ mm:
 - META:
     BLOCK_SIZE_M: 128
     BLOCK_SIZE_N: 256
-    mr: 16
-    nr: 16
-    mt: 1
+    mr: 48
+    nr: 512
+    mt: 3
     nt: 1
     mb: 8
-    nb: 8
+    nb: 16
     kb: 8
 softmax_non_inner:
 - META:
@@ -123,9 +128,15 @@ max:
     BLOCK_N: 512
 addmm:
 - META:
-    BLOCK_SIZE_M: 16
-    BLOCK_SIZE_N: 16
-    BLOCK_SIZE_K: 8192
+    BLOCK_SIZE_M: 128
+    BLOCK_SIZE_N: 256
+    mr: 48
+    nr: 512
+    mt: 3
+    nt: 1
+    mb: 8
+    nb: 16
+    kb: 8
 cross_entropy_loss:
 - META:
     BLOCK_C: 256

@@ -3,12 +3,18 @@ import logging
 import torch
 import triton
 import triton.language as tl
-
+import triton.language.extra.deeplink as dl
 from flag_gems.runtime import torch_device_fn
 
 logger = logging.getLogger(__name__)
 
 
+@libentry()
+@libtuner(
+    configs=runtime.get_tuned_config("mm"),
+    key=["M", "N", "K"],
+    strategy=["log", "log", "log"],
+)
 @triton.jit
 def bmm_kernel(
     A,
@@ -31,6 +37,16 @@ def bmm_kernel(
     TILE_K: tl.constexpr,
     GROUP_M: tl.constexpr,
     DIVISIBLE_K: tl.constexpr,
+    lhs_first: tl.constexpr,
+    mr: tl.constexpr,
+    nr: tl.constexpr,
+    kr: tl.constexpr,
+    mt: tl.constexpr,
+    nt: tl.constexpr,
+    kt: tl.constexpr,
+    mb: tl.constexpr,
+    nb: tl.constexpr,
+    kb: tl.constexpr,
 ):
 
     pidx = tl.program_id(0)
@@ -82,6 +98,16 @@ def bmm_kernel(
             b_tile = tl.load(b_ptr, boundary_check=(0, 1))
 
             acc += tl.dot(a_tile, b_tile)
+            dl.compile_hint(acc, "lhs_first", lhs_first)
+            dl.compile_hint(acc, "mr", mr)
+            dl.compile_hint(acc, "nr", nr)
+            dl.compile_hint(acc, "kr", kr)
+            dl.compile_hint(acc, "mt", mt)
+            dl.compile_hint(acc, "nt", nt)
+            dl.compile_hint(acc, "kt", kt)
+            dl.compile_hint(acc, "mb", mb)
+            dl.compile_hint(acc, "nb", nb)
+            dl.compile_hint(acc, "kb", kb)
 
             a_ptr = tl.advance(a_ptr, [0, TILE_K])
             b_ptr = tl.advance(b_ptr, [TILE_K, 0])
@@ -110,11 +136,12 @@ def bmm(A, B):
         triton.cdiv(meta["N"], meta["TILE_N"]),
         batch,
     )
-    TILE_M = 128
-    TILE_N = 128
     TILE_K = triton.next_power_of_2(K)
     GROUP_M = 1
     DIVISIBLE_K = 0
+    lhs_first = True
+    kr = TILE_K
+    kt = 1
     with torch_device_fn.device(A.device):
         bmm_kernel[grid_fn](
             A,
@@ -132,10 +159,11 @@ def bmm(A, B):
             out.stride(0),
             out.stride(1),
             out.stride(2),
-            TILE_M=TILE_M,
-            TILE_N=TILE_N,
             TILE_K=TILE_K,
             GROUP_M=GROUP_M,
             DIVISIBLE_K=DIVISIBLE_K,
+            lhs_first = lhs_first,
+            kr = kr,
+            kt = kt,
         )
     return out

@@ -5,6 +5,7 @@ from flag_gems.utils import libentry, libtuner
 from flag_gems import runtime
 import triton.language.extra.deeplink as dl
 
+
 @libentry()
 @libtuner(
     configs=runtime.get_tuned_config("mm"),
@@ -32,8 +33,10 @@ def mm_kernel(
     lhs_first: tl.constexpr,
     mr: tl.constexpr,
     nr: tl.constexpr,
+    kr: tl.constexpr,
     mt: tl.constexpr,
     nt: tl.constexpr,
+    kt: tl.constexpr,
     mb: tl.constexpr,
     nb: tl.constexpr,
     kb: tl.constexpr,
@@ -68,8 +71,10 @@ def mm_kernel(
         dl.compile_hint(accumulator, "lhs_first", lhs_first)
         dl.compile_hint(accumulator, "mr", mr)
         dl.compile_hint(accumulator, "nr", nr)
+        dl.compile_hint(accumulator, "kr", kr)
         dl.compile_hint(accumulator, "mt", mt)
         dl.compile_hint(accumulator, "nt", nt)
+        dl.compile_hint(accumulator, "kt", kt)
         dl.compile_hint(accumulator, "mb", mb)
         dl.compile_hint(accumulator, "nb", nb)
         dl.compile_hint(accumulator, "kb", kb)
@@ -115,6 +120,8 @@ def mm(a, b):
     BLOCK_SIZE_K = triton.next_power_of_2(K)
     EVEN_K = 1
     lhs_first = True
+    kr = BLOCK_SIZE_K
+    kt = 1
 
     mm_kernel[grid](
         a,
@@ -129,8 +136,10 @@ def mm(a, b):
         b.stride(1),
         c.stride(0),
         c.stride(1),
-        BLOCK_SIZE_K = BLOCK_SIZE_K,
-        EVEN_K = EVEN_K,
-        lhs_first = lhs_first,
+        BLOCK_SIZE_K=BLOCK_SIZE_K,
+        EVEN_K=EVEN_K,
+        lhs_first=lhs_first,
+        kr=kr,
+        kt=kt,
     )
     return c

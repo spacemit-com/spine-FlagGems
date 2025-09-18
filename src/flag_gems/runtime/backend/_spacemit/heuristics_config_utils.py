@@ -238,11 +238,9 @@ HEURISTICS_CONFIGS = {
     },
     "dropout": {
         "BLOCK": dropout_heur_block,
-        "num_warps": dropout_heur_num_warps,
     },
     "exponential_": {
         "BLOCK": exponential_heur_block,
-        "num_warps": exponential_heur_num_warps,
     },
     "gather": {
         "BLOCK_M": gather_heur_block_m,
@@ -257,22 +255,18 @@ HEURISTICS_CONFIGS = {
     },
     "rand": {
         "BLOCK": rand_heur_block,
-        "num_warps": rand_heur_num_warps,
     },
     "randn": {
         "BLOCK": randn_heur_block,
-        "num_warps": randn_heur_num_warps,
     },
     "softmax_non_inner": {
         "TILE_K": softmax_heur_tile_k,
         "TILE_N": softmax_heur_tile_n_non_inner,
         "ONE_TILE_PER_CTA": softmax_heur_one_tile_per_cta,
-        "num_warps": softmax_heur_num_warps_non_inner,
     },
     "softmax_inner": {
         "TILE_N": softmax_heur_tile_n_inner,
         "ONE_TILE_PER_CTA": softmax_heur_one_tile_per_cta,
-        "num_warps": softmax_heur_num_warps_inner,
     },
     "softmax_backward_non_inner": {
         "TILE_N": softmax_heur_tile_n_bwd_non_inner,
@@ -284,7 +278,6 @@ HEURISTICS_CONFIGS = {
     },
     "uniform": {
         "BLOCK": uniform_heur_block,
-        "num_warps": uniform_heur_num_warps,
     },
     "upsample_nearest2d": {
         "SAME_H": upsample_nearest2d_SAME_H,
