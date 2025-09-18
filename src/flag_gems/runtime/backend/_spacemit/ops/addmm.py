@@ -4,12 +4,13 @@ import torch
 import triton
 import triton.language as tl
 from flag_gems import runtime
+from flag_gems.utils import libentry, libtuner
 import triton.language.extra.deeplink as dl
 
 
 @libentry()
 @libtuner(
-    configs=runtime.get_tuned_config("mm"),
+    configs=runtime.get_tuned_config("addmm"),
     key=["M", "N", "K"],
     strategy=["log", "log", "log"],
 )

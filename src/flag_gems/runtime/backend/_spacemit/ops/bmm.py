@@ -4,6 +4,8 @@ import torch
 import triton
 import triton.language as tl
 import triton.language.extra.deeplink as dl
+from flag_gems import runtime
+from flag_gems.utils import libentry, libtuner
 from flag_gems.runtime import torch_device_fn
 
 logger = logging.getLogger(__name__)
@@ -11,7 +13,7 @@ logger = logging.getLogger(__name__)
 
 @libentry()
 @libtuner(
-    configs=runtime.get_tuned_config("mm"),
+    configs=runtime.get_tuned_config("bmm"),
     key=["M", "N", "K"],
     strategy=["log", "log", "log"],
 )
