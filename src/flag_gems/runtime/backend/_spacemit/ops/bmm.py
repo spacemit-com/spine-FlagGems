@@ -3,7 +3,7 @@ import logging
 import torch
 import triton
 import triton.language as tl
-import triton.language.extra.deeplink as dl
+import triton.language.extra.smt as smt
 from flag_gems import runtime
 from flag_gems.utils import libentry, libtuner
 from flag_gems.runtime import torch_device_fn
@@ -100,16 +100,16 @@ def bmm_kernel(
             b_tile = tl.load(b_ptr, boundary_check=(0, 1))
 
             acc += tl.dot(a_tile, b_tile)
-            dl.compile_hint(acc, "lhs_first", lhs_first)
-            dl.compile_hint(acc, "mr", mr)
-            dl.compile_hint(acc, "nr", nr)
-            dl.compile_hint(acc, "kr", kr)
-            dl.compile_hint(acc, "mt", mt)
-            dl.compile_hint(acc, "nt", nt)
-            dl.compile_hint(acc, "kt", kt)
-            dl.compile_hint(acc, "mb", mb)
-            dl.compile_hint(acc, "nb", nb)
-            dl.compile_hint(acc, "kb", kb)
+            smt.compile_hint(acc, "lhs_first", lhs_first)
+            smt.compile_hint(acc, "mr", mr)
+            smt.compile_hint(acc, "nr", nr)
+            smt.compile_hint(acc, "kr", kr)
+            smt.compile_hint(acc, "mt", mt)
+            smt.compile_hint(acc, "nt", nt)
+            smt.compile_hint(acc, "kt", kt)
+            smt.compile_hint(acc, "mb", mb)
+            smt.compile_hint(acc, "nb", nb)
+            smt.compile_hint(acc, "kb", kb)
 
             a_ptr = tl.advance(a_ptr, [0, TILE_K])
             b_ptr = tl.advance(b_ptr, [TILE_K, 0])

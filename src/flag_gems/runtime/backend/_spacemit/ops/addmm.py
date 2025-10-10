@@ -5,7 +5,7 @@ import triton
 import triton.language as tl
 from flag_gems import runtime
 from flag_gems.utils import libentry, libtuner
-import triton.language.extra.deeplink as dl
+import triton.language.extra.smt as smt
 
 
 @libentry()
@@ -75,16 +75,16 @@ def addmm_kernel(
         a = tl.load(a_block_ptr, boundary_check=(0, 1))
         b = tl.load(b_block_ptr, boundary_check=(0, 1))
         accumulator += tl.dot(a, b, allow_tf32=False)
-        dl.compile_hint(accumulator, "lhs_first", lhs_first)
-        dl.compile_hint(accumulator, "mr", mr)
-        dl.compile_hint(accumulator, "nr", nr)
-        dl.compile_hint(accumulator, "kr", kr)
-        dl.compile_hint(accumulator, "mt", mt)
-        dl.compile_hint(accumulator, "nt", nt)
-        dl.compile_hint(accumulator, "kt", kt)
-        dl.compile_hint(accumulator, "mb", mb)
-        dl.compile_hint(accumulator, "nb", nb)
-        dl.compile_hint(accumulator, "kb", kb)
+        smt.compile_hint(accumulator, "lhs_first", lhs_first)
+        smt.compile_hint(accumulator, "mr", mr)
+        smt.compile_hint(accumulator, "nr", nr)
+        smt.compile_hint(accumulator, "kr", kr)
+        smt.compile_hint(accumulator, "mt", mt)
+        smt.compile_hint(accumulator, "nt", nt)
+        smt.compile_hint(accumulator, "kt", kt)
+        smt.compile_hint(accumulator, "mb", mb)
+        smt.compile_hint(accumulator, "nb", nb)
+        smt.compile_hint(accumulator, "kb", kb)
     else:
         for k in range(0, tl.cdiv(K, BLOCK_SIZE_K)):
             a = tl.load(a_block_ptr, boundary_check=(0, 1))
