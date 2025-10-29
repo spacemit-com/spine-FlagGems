@@ -54,13 +54,11 @@ mm:
 - META:
     BLOCK_SIZE_M: 128
     BLOCK_SIZE_N: 256
-    mr: 48
-    nr: 512
-    mt: 3
-    nt: 1
-    mb: 8
-    nb: 16
-    kb: 8
+    EVEN_K: 1
+    SUB_BLK_M: 64
+    MICRO_M: 8
+    MICRO_K: 8
+    MICRO_N: 16
 softmax_non_inner:
 - META:
     TILE_K: 32
