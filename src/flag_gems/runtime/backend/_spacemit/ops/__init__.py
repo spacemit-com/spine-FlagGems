@@ -26,6 +26,11 @@ from .sort import sort
 from .unfold import unfold
 from .triu import triu
 from .argmax import argmax
+import sys
+from flag_gems.runtime.backend._spacemit.utils.pointwise_dynamic import SpacemitModuleGenerator
+pointwise_dynamic_module = sys.modules['flag_gems.utils.pointwise_dynamic']
+pointwise_dynamic_module.ModuleGenerator = SpacemitModuleGenerator
+assert pointwise_dynamic_module.ModuleGenerator is SpacemitModuleGenerator
 
 __all__ = [
            "any",

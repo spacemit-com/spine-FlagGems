@@ -84,6 +84,13 @@ CODEGEN_COFIGS = {
         True,
         prefer_1d_tile=True,
     ),
+    vendors.SPACEMIT: CodeGenConfig(
+        512,
+        (12, 65536, 65536),
+        32,
+        True,
+        prefer_1d_tile=True,
+    ),
 }
 
 HEURISTICS_CONFIG = {
