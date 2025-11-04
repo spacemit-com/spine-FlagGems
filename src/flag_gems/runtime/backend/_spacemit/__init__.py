@@ -4,6 +4,9 @@ from backend_utils import VendorInfoBase  # noqa: E402
 
 # from .heuristics_config_utils import HEURISTICS_CONFIGS
 
+from .utils.config_pre_hook import setup_triton_config
+setup_triton_config()
+
 vendor_info = VendorInfoBase(
     vendor_name="spacemit", device_name="cpu", device_query_cmd="lscpu"
 )

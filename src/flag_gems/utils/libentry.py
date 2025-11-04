@@ -219,7 +219,7 @@ class LibTuner(triton.runtime.Autotuner):
             )
         if config.pre_hook is not None:
             full_nargs = {**self.nargs, **kwargs, **config.all_kwargs()}
-            config.pre_hook(full_nargs)
+            config.pre_hook(config, full_nargs)
         ret = self.fn.run(
             *args,
             **kwargs,
