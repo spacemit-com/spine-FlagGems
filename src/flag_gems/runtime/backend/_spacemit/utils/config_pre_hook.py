@@ -12,6 +12,12 @@ LEGAL_CONFIGS = {
             {"MICRO_M": 8, "MICRO_N": 16, "MICRO_K": 8},
             {"MICRO_M": 16, "MICRO_N": 8, "MICRO_K": 16},
         ]
+    },
+    "0xA03C": {
+        "mm": [
+            {"MICRO_M": 8, "MICRO_N": 16, "MICRO_K": 8},
+            {"MICRO_M": 16, "MICRO_N": 8, "MICRO_K": 16},
+        ]
     }
 }
 

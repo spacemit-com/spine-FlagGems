@@ -86,10 +86,10 @@ CODEGEN_COFIGS = {
     ),
     vendors.SPACEMIT: CodeGenConfig(
         512,
-        (12, 65536, 65536),
-        32,
+        (8, 512, 512),
+        16,
         True,
-        prefer_1d_tile=True,
+        prefer_1d_tile=False,
     ),
 }
 
