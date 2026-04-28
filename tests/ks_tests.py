@@ -17,10 +17,7 @@ if flag_gems.vendor_name == "kunlunxin":
 @pytest.mark.normal
 @pytest.mark.parametrize("shape", DISTRIBUTION_SHAPES)
 @pytest.mark.parametrize("dtype", FLOAT_DTYPES)
-def test_normal_pvalue(shape, dtype):
-    if flag_gems.vendor_name == "cambricon":
-        torch.manual_seed(42)
-        torch.mlu.manual_seed_all(42)
+def test_accuracy_normal_pvalue(shape, dtype):
     loc = torch.full(size=shape, fill_value=3.0, dtype=dtype, device=flag_gems.device)
     scale = torch.full(
         size=shape, fill_value=10.0, dtype=dtype, device=flag_gems.device
@@ -52,10 +49,7 @@ def test_uniform_pvalue(shape, dtype):
 @pytest.mark.parametrize("shape", DISTRIBUTION_SHAPES)
 @pytest.mark.parametrize("dtype", (torch.float32,))
 @pytest.mark.parametrize("lambd", (0.01, 0.5, 100.0))
-def test_exponential_pvalue(shape, dtype, lambd):
-    if flag_gems.vendor_name == "cambricon":
-        torch.manual_seed(42)
-        torch.mlu.manual_seed_all(42)
+def test_accuracy_exponential_pvalue(shape, dtype, lambd):
     x = torch.empty(size=shape, dtype=dtype, device=flag_gems.device)
     with flag_gems.use_gems():
         x.exponential_(lambd=lambd)
@@ -67,10 +61,7 @@ def test_exponential_pvalue(shape, dtype, lambd):
 @pytest.mark.rand
 @pytest.mark.parametrize("shape", DISTRIBUTION_SHAPES)
 @pytest.mark.parametrize("dtype", [torch.float16, torch.float32])
-def test_rand_pvalue(shape, dtype):
-    if flag_gems.vendor_name == "cambricon":
-        torch.manual_seed(42)
-        torch.mlu.manual_seed_all(42)
+def test_accuracy_rand_pvalue(shape, dtype):
     with flag_gems.use_gems():
         res_out = torch.rand(shape, dtype=dtype, device=flag_gems.device)
     pvalue = scipy.stats.kstest(
