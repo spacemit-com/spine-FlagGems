@@ -211,6 +211,19 @@ jobs:
       PROXYC: ${{ secrets.PROXYC }}
       PROXYG: ${{ secrets.PROXYG }}
 
+  backend-spacemit:
+    needs: preprocess
+    if: contains(needs.preprocess.outputs.labels, 'vendor/Spacemit')
+    uses: ./.github/workflows/backend-test.yaml
+    with:
+      vendor: spacemit
+      runner_label: spacemit
+      gpu_check_script: tools/cpu_check_spacemit.sh
+      changed_files: ${{ join(needs.preprocess.outputs.changed_files, ' ') }}
+      pr_id: ${{ needs.preprocess.outputs.pr_id }}
+    secrets:
+      RUNNER_SSH_KEY: ${{ secrets.RUNNER_SSH_KEY }}
+
   backend-tsingmicro:
     needs: preprocess
     if: contains(needs.preprocess.outputs.labels, 'vendor/TsingMicro')
