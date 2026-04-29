@@ -5,7 +5,6 @@ from flag_gems.utils.pointwise_dynamic import (
     WrapperGenerator,
     _cs,
     _tuple_content,
-    pointwise_dynamic,
 )
 
 
