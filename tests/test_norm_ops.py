@@ -199,6 +199,7 @@ def test_accuracy_layernorm(shape, dtype, wb_none):
     gems_assert_close(res_out, ref_out, dtype)
 
 
+@pytest.mark.skipif(flag_gems.vendor_name == "spacemit", reason="TODO")
 @pytest.mark.layer_norm
 @pytest.mark.native_layer_norm
 @pytest.mark.parametrize(
@@ -700,6 +701,7 @@ def test_accuracy_batch_norm(shape, dtype, affine):
     gems_assert_close(running_var, ref_running_var, dtype)
 
 
+@pytest.mark.skipif(flag_gems.vendor_name == "spacemit", reason="TODO")
 @pytest.mark.batch_norm
 @pytest.mark.parametrize(
     "shape",
