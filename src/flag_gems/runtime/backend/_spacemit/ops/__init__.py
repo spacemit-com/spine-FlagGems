@@ -2,14 +2,13 @@
 from .argmax import argmax
 from .argmin import argmin
 from .bmm import bmm
-
 # from .conv1d import conv1d
 # from .conv2d import conv2d
 # from .thnn_conv2d import thnn_conv2d
 # from .conv_depthwise2d import _conv_depthwise2d
 # from .flash_attention import flash_attention, scaled_dot_product_attention
 from .gelu import gelu
-from .layernorm import layer_norm
+# from .layernorm import layer_norm
 from .mean import global_avg_pool, mean_dim
 from .mm import mm
 from .mv import mv
@@ -25,19 +24,21 @@ from .sigmoid import sigmoid
 from .silu import silu
 from .softmax import softmax
 from .where import where_scalar_other, where_scalar_self, where_self, where_self_out
+from .batch_norm import batch_norm
 
 __all__ = [
     # "addmm",
     "argmax",
     "argmin",
     "bmm",
+    "batch_norm",
     # "conv1d",
     # "conv2d",
     # "_conv_depthwise2d",
     # "flash_attention",
     "gelu",
     "global_avg_pool",
-    "layer_norm",
+    # "layer_norm",
     "mean_dim",
     "mm",
     "mv",

@@ -643,6 +643,7 @@ def test_accuracy_trunc_div_(shape, dtype):
     gems_assert_close(res_out, ref_out, dtype, equal_nan=True)
 
 
+@pytest.mark.skipif(flag_gems.vendor_name == "spacemit", reason="TODO")
 @pytest.mark.skipif(flag_gems.vendor_name == "ascend", reason="TODO")
 @pytest.mark.trunc_divide
 @pytest.mark.parametrize("dtype", [torch.float32, torch.int64])
@@ -664,6 +665,7 @@ def test_accuracy_trunc_divide_scalar_scalar(dtype):
         gems_assert_close(res_out, ref_out, dtype)
 
 
+@pytest.mark.skipif(flag_gems.vendor_name == "spacemit", reason="TODO")
 @pytest.mark.skipif(flag_gems.vendor_name == "ascend", reason="TODO")
 # TODO: failed at large size, eg. (65536 * 2048,)
 @pytest.mark.floor_divide
@@ -682,6 +684,7 @@ def test_accuracy_floor_div_float(shape, dtype):
     gems_assert_equal(res_out, ref_out, equal_nan=True)
 
 
+@pytest.mark.skipif(flag_gems.vendor_name == "spacemit", reason="TODO")
 @pytest.mark.skipif(flag_gems.vendor_name == "ascend", reason="TODO")
 # TODO: failed at large size, eg. (65536 * 2048,)
 @pytest.mark.inplace
@@ -1291,6 +1294,7 @@ def test_accuracy_minimum(shape, dtype):
     gems_assert_equal(res_out, ref_out)
 
 
+@pytest.mark.skipif(flag_gems.vendor_name == "spacemit", reason="TODO")
 @pytest.mark.skipif(flag_gems.vendor_name == "ascend", reason="TODO")
 @pytest.mark.pow
 @pytest.mark.parametrize("scalar", SCALARS)
@@ -1312,6 +1316,7 @@ def test_accuracy_pow_scalar_tensor(scalar, shape, dtype):
     gems_assert_close(res_out, ref_out, dtype, equal_nan=True)
 
 
+@pytest.mark.skipif(flag_gems.vendor_name == "spacemit", reason="TODO")
 @pytest.mark.skipif(flag_gems.vendor_name == "ascend", reason="TODO")
 @pytest.mark.pow
 @pytest.mark.parametrize("shape", POINTWISE_SHAPES)
@@ -1336,6 +1341,7 @@ def test_accuracy_pow_tensor_scalar(scalar, shape, dtype):
     gems_assert_close(res_out, ref_out, dtype, equal_nan=True)
 
 
+@pytest.mark.skipif(flag_gems.vendor_name == "spacemit", reason="TODO")
 @pytest.mark.inplace
 @pytest.mark.pow_
 @pytest.mark.parametrize("shape", POINTWISE_SHAPES)

@@ -492,4 +492,7 @@ def pad(self, pad, mode="constant", value=None):
 
 
 def constant_pad_nd(self, pad_list, value=0):
-    return pad(self, pad_list, mode="constant", value=value)
+    if value is None:
+        value = 0.0
+    out = _pad_func(self, pad_list, "constant", float(value))
+    return out
