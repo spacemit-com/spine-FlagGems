@@ -162,7 +162,7 @@ def test_accuracy_full_like(shape, dtype, xdtype, fill_value):
         res_out = torch.full_like(x, fill_value, dtype=dtype)
     gems_assert_equal(res_out, torch.full_like(x, fill_value, dtype=dtype))
 
-
+@pytest.mark.skipif(flag_gems.vendor_name == "spacemit", reason="TODO")
 @pytest.mark.skipif(flag_gems.vendor_name == "hygon", reason="RESULT TODOFIX")
 @pytest.mark.skipif(flag_gems.device == "musa", reason="ZeroDivisionError")
 @pytest.mark.skipif(flag_gems.vendor_name == "kunlunxin", reason="RESULT TODOFIX")

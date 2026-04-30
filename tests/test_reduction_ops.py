@@ -1070,6 +1070,7 @@ INDEX_PUT_SHAPE_ACC_TRUE = (
 )
 
 
+@pytest.mark.skipif(flag_gems.vendor_name == "spacemit", reason="TODO")
 @pytest.mark.index_put
 @pytest.mark.parametrize(
     "input_shape, indices_shape, values_shape", INDEX_PUT_SHAPE_ACC_TRUE

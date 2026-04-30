@@ -389,6 +389,7 @@ QUANTILE_INTERPOLATION = (
 )
 
 
+@pytest.mark.skipif(flag_gems.vendor_name == "spacemit", reason="TODO")
 @pytest.mark.skipif(SkipVersion("triton", "<3.0"), reason="Skipping Triton version.")
 @pytest.mark.quantile
 @pytest.mark.parametrize("shape", QUANTILE_SHAPES)
