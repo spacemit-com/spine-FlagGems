@@ -4,7 +4,6 @@ import triton
 import triton.language as tl
 
 from flag_gems.utils import tl_extra_shim
-
 from flag_gems.utils.pointwise_dynamic import pointwise_dynamic
 
 logger = logging.getLogger(__name__)
