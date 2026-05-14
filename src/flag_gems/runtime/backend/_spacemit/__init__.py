@@ -1,7 +1,7 @@
-from typing import Any
 import importlib.util
-from backend_utils import VendorInfoBase  # noqa: E402
+from typing import Any
 
+from backend_utils import VendorInfoBase  # noqa: E402
 
 if importlib.util.find_spec("triton.backends.spine_triton") is not None:
     from .utils.config_pre_hook import setup_triton_config
