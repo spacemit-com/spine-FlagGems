@@ -40,6 +40,8 @@ from .conv_depthwise2d import _conv_depthwise2d
 from .cos import cos, cos_
 from .cumsum import cumsum, cumsum_out, normed_cumsum
 from .div import true_divide, true_divide_, floor_divide, trunc_divide
+from .dropout import dropout
+from .embedding import embedding
 from .eq import eq, eq_scalar
 from .erf import erf, erf_
 from .exp import exp, exp_
@@ -48,6 +50,7 @@ from .ge import ge, ge_scalar
 from .gelu import gelu
 from .groupnorm import group_norm
 from .gt import gt, gt_scalar
+from .isin import isin
 from .isinf import isinf
 from .isnan import isnan
 from .layernorm import layer_norm
@@ -81,6 +84,7 @@ from .pow import (
     pow_tensor_tensor_,
 )
 from .relu import relu, relu_
+from .reciprocal import reciprocal
 from .rsqrt import rsqrt
 from .rsub import rsub
 from .sigmoid import sigmoid
@@ -92,6 +96,7 @@ from .sub import sub, sub_
 from .sum import sum, sum_dim, sum_dim_out, sum_out
 from .tanh import tanh, tanh_
 from .to import to_dtype
+from .topk import topk_stage1_kernel
 from .transpose import transpose
 from .triu import triu
 from .unfold import unfold
@@ -149,6 +154,8 @@ __all__ = [
     "cos_",
     "cumsum",
     "cumsum_out",
+    "dropout",
+    "embedding",
     "eq",
     "eq_scalar",
     "erf",
@@ -166,6 +173,7 @@ __all__ = [
     "group_norm",
     "gt",
     "gt_scalar",
+    "isin",
     "isinf",
     "isnan",
     "layer_norm",
@@ -206,6 +214,7 @@ __all__ = [
     "pow_tensor_tensor_",
     "relu",
     "relu_",
+    "reciprocal",
     "rsqrt",
     "rsub",
     "ScaleDotProductAttention",
@@ -226,6 +235,7 @@ __all__ = [
     "tanh",
     "tanh_",
     "to_dtype",
+    "topk_stage1_kernel",
     "transpose",
     "triu",
     "true_divide",
