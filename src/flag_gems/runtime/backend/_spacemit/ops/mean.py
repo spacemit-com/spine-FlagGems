@@ -20,7 +20,7 @@ def mean_kernel_1(
 ):
     # Vectorized load with block_ptr for better spine-triton codegen
     pid = tle.program_id(0)
-    offset_start = pid * BLOCK_SIZE
+    offset_start = (pid * BLOCK_SIZE).to(tl.int32)
 
     inp_ptr = tl.make_block_ptr(
         base=inp,
@@ -78,7 +78,7 @@ def mean(inp, *, dtype=None):
 
 @libentry()
 @triton.autotune(
-    configs=runtime.get_tuned_config("mean"),
+    configs=runtime.get_tuned_config("mean_spacemit_v1"),
     key=["M", "N"],
 )
 @triton.jit
