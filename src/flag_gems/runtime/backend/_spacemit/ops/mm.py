@@ -255,8 +255,6 @@ def mm_out(a, b, *, out):
     if b.stride(0) > 1 and b.stride(1) > 1:
         b = b.contiguous()
 
-    # print b info
-    print("b shape:", b.shape, "b stride:", b.stride())
     # checks constraints
     assert a.shape[1] == b.shape[0], "incompatible dimensions"
     M, K = a.shape
