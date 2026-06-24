@@ -41,7 +41,6 @@ from .cos import cos, cos_
 from .cumsum import cumsum, cumsum_out, normed_cumsum
 from .div import true_divide, true_divide_, floor_divide, trunc_divide
 from .dropout import dropout
-from .embedding import embedding
 from .eq import eq, eq_scalar
 from .erf import erf, erf_
 from .exp import exp, exp_
@@ -50,6 +49,7 @@ from .ge import ge, ge_scalar
 from .gelu import gelu
 from .groupnorm import group_norm
 from .gt import gt, gt_scalar
+from .index_select import index_select
 from .isin import isin
 from .isinf import isinf
 from .isnan import isnan
@@ -66,7 +66,7 @@ from .min import min, min_dim
 from .mm import mm
 from .mul import mul, mul_
 from .multinomial import multinomial
-from .mv import mv
+# from .mv import mv
 from .nllloss import (
     nll_loss_forward,
     nll_loss2d_forward,
@@ -155,7 +155,6 @@ __all__ = [
     "cumsum",
     "cumsum_out",
     "dropout",
-    "embedding",
     "eq",
     "eq_scalar",
     "erf",
@@ -173,6 +172,7 @@ __all__ = [
     "group_norm",
     "gt",
     "gt_scalar",
+    "index_select",
     "isin",
     "isinf",
     "isnan",
@@ -195,7 +195,7 @@ __all__ = [
     "mul",
     "mul_",
     "multinomial",
-    "mv",
+    # "mv",
     "nll_loss_forward",
     "nll_loss2d_forward",
     "normal_",

@@ -86,6 +86,9 @@ def normal_case(name: str, shape: tuple[int, ...], dtypes=FLOAT_DTYPES) -> Bench
     return BenchmarkCase(name=name, dtypes=dtypes, prepare=prepare, run=run)
 
 
+STOCHASTIC_OPS = {"normal", "randn", "dropout"}
+
+
 def clamp_case(name: str, shape: tuple[int, ...], dtypes=FLOAT_DTYPES) -> BenchmarkCase:
     def prepare(dtype: torch.dtype):
         x = make_float_tensor(shape, dtype)
@@ -126,7 +129,7 @@ def int_unary_case(name: str, op: Callable[[torch.Tensor], object], shape: tuple
 def bool_unary_case(name: str, op: Callable[[torch.Tensor], object], shape: tuple[int, ...]) -> BenchmarkCase:
     def prepare(_: torch.dtype):
         x = make_bool_tensor(shape)
-        return (x,),
+        return (x,), {}
 
     return BenchmarkCase(name=name, dtypes=BOOL_DTYPES, prepare=prepare, run=op)
 
@@ -251,10 +254,12 @@ def group_norm_case(name: str, shape: tuple[int, int, int, int], num_groups: int
 
     def prepare(dtype: torch.dtype):
         x = make_float_tensor((n, c, h, w), dtype)
-        return (x,), {}
+        weight = make_float_tensor((c,), dtype)
+        bias = make_float_tensor((c,), dtype)
+        return (x, weight, bias), {}
 
-    def run(x: torch.Tensor):
-        return torch.nn.functional.group_norm(x, num_groups=num_groups)
+    def run(x: torch.Tensor, weight: torch.Tensor, bias: torch.Tensor):
+        return torch.nn.functional.group_norm(x, num_groups=num_groups, weight=weight, bias=bias)
 
     return BenchmarkCase(name=name, dtypes=dtypes, prepare=prepare, run=run)
 
@@ -416,8 +421,8 @@ def elementwise_cases() -> list[BenchmarkCase]:
     bool_shape = (32, 32)
 
     return [
-        reduction_case("min", lambda x: torch.min(x).values, shape),
-        reduction_case("max", lambda x: torch.max(x).values, shape),
+        reduction_case("min", torch.min, shape),
+        reduction_case("max", torch.max, shape),
         reduction_case("amax", lambda x: torch.amax(x), shape),
         reduction_case("sum", lambda x: torch.sum(x), shape),
         unary_case("isnan", torch.isnan, shape),
@@ -468,21 +473,21 @@ def elementwise_cases() -> list[BenchmarkCase]:
 
 def matrix_cases() -> list[BenchmarkCase]:
     return [
-        mm_case("mm", (512, 512, 512)),
-        addmm_case("addmm", (512, 512, 512)),
-        bmm_case("bmm", (8, 128, 128, 128)),
-        matmul_case("matmul", (512, 512, 512)),
-        mv_case("mv", (1024, 1024)),
-        linear_case("linear", (512, 512, 512)),
+        mm_case("mm", (32, 32, 32)),
+        addmm_case("addmm", (32, 32, 32)),
+        bmm_case("bmm", (8, 32, 32, 32)),
+        matmul_case("matmul", (32, 32, 32)),
+        # mv_case("mv", (4096, 128), dtypes=(torch.float16,)),
+        linear_case("linear", (32, 32, 32)),
         outer_case("outer", 32),
     ]
 
 
 def normalization_cases() -> list[BenchmarkCase]:
     return [
-        layer_norm_case("layernorm", (1024, 1024)),
-        native_layer_norm_case("native_layer_norm", (1024, 1024)),
-        group_norm_case("group_norm", (8, 32, 32, 32), num_groups=8),
+        layer_norm_case("layernorm", (32, 32)),
+        native_layer_norm_case("native_layer_norm", (32, 32)),
+        group_norm_case("group_norm", (1, 4, 2, 2), num_groups=1),
         native_group_norm_case("native_group_norm", (8, 32, 32, 32), num_groups=8),
         batch_norm_case("batch_norm", (8, 32, 32, 32)),
     ]
@@ -526,13 +531,27 @@ def run_case(case: BenchmarkCase, warmup: int, iterations: int) -> None:
 
 def check_correctness(case: BenchmarkCase, rtol: float = 1e-2, atol: float = 1e-3) -> None:
     print(f"\n--- [correctness] {case.name} ---")
+    is_stochastic = any(s in case.name.lower() for s in STOCHASTIC_OPS)
     for dtype in case.dtypes:
         try:
             args, kwargs = case.prepare(dtype)
-            with torch.inference_mode():
-                ref = case.run(*args, **kwargs)
             with torch.inference_mode(), flag_gems.use_gems():
                 out = case.run(*args, **kwargs)
+
+            def _compare_stochastic(out_t, args, label=""):
+                if not isinstance(out_t, torch.Tensor) or not out_t.is_floating_point():
+                    return
+                out_f = out_t.float()
+                mean_arg = args[0].float() if isinstance(args[0], torch.Tensor) else None
+                if mean_arg is not None:
+                    n = out_f.numel()
+                    mean_diff = (out_f.mean() - mean_arg.mean()).abs().item()
+                    # expected std of sample mean ≈ 1/sqrt(n); allow 5-sigma
+                    threshold = 5.0 / (n ** 0.5)
+                    ok = mean_diff < max(threshold, 0.05)
+                    print(f"  dtype {dtype}{label}: mean_diff={mean_diff:.4f} (thr={threshold:.4f}) {'PASS' if ok else 'FAIL'}")
+                else:
+                    print(f"  dtype {dtype}{label}: no mean arg to check")
 
             def _compare(ref_t, out_t, label=""):
                 if not isinstance(ref_t, torch.Tensor) or not isinstance(out_t, torch.Tensor):
@@ -555,19 +574,28 @@ def check_correctness(case: BenchmarkCase, rtol: float = 1e-2, atol: float = 1e-
                         mismatches = (ref_t != out_t).sum().item()
                         print(f"  dtype {dtype}{label}: FAIL ({mismatches} mismatches)")
 
-            if isinstance(ref, tuple) and isinstance(out, tuple):
-                for i, (r, o) in enumerate(zip(ref, out)):
-                    _compare(r, o, f"[{i}]")
+            if is_stochastic:
+                if isinstance(out, torch.Tensor):
+                    _compare_stochastic(out, args)
+                elif isinstance(out, tuple):
+                    for i, o in enumerate(out):
+                        _compare_stochastic(o, args, f"[{i}]")
             else:
-                _compare(ref, out)
+                with torch.inference_mode():
+                    ref = case.run(*args, **kwargs)
+                if isinstance(ref, tuple) and isinstance(out, tuple):
+                    for i, (r, o) in enumerate(zip(ref, out)):
+                        _compare(r, o, f"[{i}]")
+                else:
+                    _compare(ref, out)
         except Exception as exc:
             print(f"  dtype {dtype}: ERROR - {exc}")
 
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Simple operator performance benchmark")
-    parser.add_argument("--warmup", type=int, default=0)
-    parser.add_argument("--iters", type=int, default=1)
+    parser.add_argument("--warmup", type=int, default=10)
+    parser.add_argument("--iters", type=int, default=100)
     parser.add_argument("--ops", type=str, default="all", help="Comma-separated op names or 'all'")
     parser.add_argument("--check", action="store_true", help="Run correctness check against torch")
     return parser.parse_args()

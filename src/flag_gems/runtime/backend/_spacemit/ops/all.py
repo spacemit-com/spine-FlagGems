@@ -55,15 +55,16 @@ def all_kernel_dim(
     row_start = tl.program_id(0) * BLOCK_M
     row_end = min(row_start + BLOCK_M, M)
     for mi in range(row_start, row_end, 1):
-        has_zero = tl.full([1, BLOCK_N], value=0, dtype=tl.int1)
+        has_zero_scalar = tl.zeros([], dtype=tl.int1)
         row_inp = inp + mi * N
         row_out = out + mi
         for off in range(0, N, BLOCK_N):
-            cols = off + tl.arange(0, BLOCK_N)[None, :]
+            cols = off + tl.arange(0, BLOCK_N)
             mask = cols < N
             a = tl.load(row_inp + cols, mask, other=1.0)
-            has_zero = has_zero | (a == 0)
-        all_val = tl.reduce(has_zero, axis=1, combine_fn=reduce_all) == 0
+            has_zero_block = (a == 0)
+            has_zero_scalar = has_zero_scalar | tl.reduce(has_zero_block, axis=0, combine_fn=reduce_all)
+        all_val = (has_zero_scalar == 0)
         tl.store(row_out, all_val.to(tl.int8))
 
 

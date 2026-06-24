@@ -16,45 +16,24 @@ logger = logging.getLogger(__name__)
 def im2col_kernel(
     input_ptr,
     cols_ptr,
-    N,
-    C,
-    H,
-    W,
-    KH,
-    KW,
-    stride_h,
-    stride_w,
-    pad_h,
-    pad_w,
-    dil_h,
-    dil_w,
-    OH,
-    OW,
-    K,
-    M,
-    in_stride_n,
-    in_stride_c,
-    in_stride_h,
-    in_stride_w,
-    col_stride_n,
-    col_stride_k,
-    col_stride_m,
+    N, C, H, W, KH, KW,
+    stride_h, stride_w, pad_h, pad_w, dil_h, dil_w,
+    OH, OW, K, M,
+    in_stride_n, in_stride_c, in_stride_h, in_stride_w,
+    col_stride_n, col_stride_k, col_stride_m,
     BLOCK_M: tl.constexpr,
 ):
-    # One program handles BLOCK_M output positions for a fixed (n, k).
-    # k indexes the im2col row in [c_in][kh][kw] order (matches torch unfold),
-    # so it decomposes as: c = k // (KH*KW), kh = (k % (KH*KW)) // KW, kw = k % KW.
     pid_nk = tl.program_id(0)
-    pid_m = tl.program_id(1)
+    pid_m  = tl.program_id(1)
 
-    n = pid_nk // K
-    k = pid_nk % K
-    c = k // (KH * KW)
+    n  = pid_nk // K
+    k  = pid_nk % K
+    c  = k // (KH * KW)
     rem = k % (KH * KW)
     kh = rem // KW
     kw = rem % KW
 
-    m = pid_m * BLOCK_M + tl.arange(0, BLOCK_M)
+    m      = pid_m * BLOCK_M + tl.arange(0, BLOCK_M)
     mask_m = m < M
     oh = m // OW
     ow = m % OW
@@ -64,8 +43,8 @@ def im2col_kernel(
     valid = mask_m & (ih >= 0) & (ih < H) & (iw >= 0) & (iw < W)
 
     in_offs = (
-        n * in_stride_n
-        + c * in_stride_c
+        n  * in_stride_n
+        + c  * in_stride_c
         + ih * in_stride_h
         + iw * in_stride_w
     )
@@ -82,48 +61,27 @@ def conv2d(input, weight, bias=None, stride=1, padding=0, dilation=1, groups=1):
     N, C, H, W = input.shape
     OC, C_per_group, KH, KW = weight.shape
 
-    str_h, str_w = (stride, stride) if isinstance(stride, int) else stride
-    pad_h, pad_w = (padding, padding) if isinstance(padding, int) else padding
-    dil_h, dil_w = (dilation, dilation) if isinstance(dilation, int) else dilation
+    str_h, str_w = (stride, stride) if isinstance(stride, int) else tuple(stride)
+    pad_h, pad_w = (padding, padding) if isinstance(padding, int) else tuple(padding)
+    dil_h, dil_w = (dilation, dilation) if isinstance(dilation, int) else tuple(dilation)
 
     OH = (H + 2 * pad_h - dil_h * (KH - 1) - 1) // str_h + 1
     OW = (W + 2 * pad_w - dil_w * (KW - 1) - 1) // str_w + 1
-
     M = OH * OW
     K_total = C * KH * KW
-    OC_per_group = OC // groups
     K_per_group = C_per_group * KH * KW
+    OC_per_group = OC // groups
 
     cols = torch.empty((N, K_total, M), dtype=input.dtype, device=input.device)
-
     BLOCK_M = 128
     grid = (N * K_total, triton.cdiv(M, BLOCK_M))
     im2col_kernel[grid](
-        input,
-        cols,
-        N,
-        C,
-        H,
-        W,
-        KH,
-        KW,
-        str_h,
-        str_w,
-        pad_h,
-        pad_w,
-        dil_h,
-        dil_w,
-        OH,
-        OW,
-        K_total,
-        M,
-        input.stride(0),
-        input.stride(1),
-        input.stride(2),
-        input.stride(3),
-        cols.stride(0),
-        cols.stride(1),
-        cols.stride(2),
+        input, cols,
+        N, C, H, W, KH, KW,
+        str_h, str_w, pad_h, pad_w, dil_h, dil_w,
+        OH, OW, K_total, M,
+        input.stride(0), input.stride(1), input.stride(2), input.stride(3),
+        cols.stride(0), cols.stride(1), cols.stride(2),
         BLOCK_M=BLOCK_M,
     )
 
@@ -143,7 +101,6 @@ def conv2d(input, weight, bias=None, stride=1, padding=0, dilation=1, groups=1):
     output = torch.cat(out_groups, dim=0).permute(1, 0, 2).contiguous()
 
     if bias is not None:
-        output += bias.reshape(1, OC, 1)
+        output = output + bias.reshape(1, OC, 1)
 
     return output.reshape(N, OC, OH, OW)
-

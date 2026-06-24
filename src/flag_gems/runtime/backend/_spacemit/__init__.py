@@ -32,6 +32,9 @@ def _load_op(module_name, op_name=None):
 
 
 def get_register_op_config():
+    DISABLE_SPACEMIT_OPS = os.environ.get("DISABLE_SPACEMIT_OPS", "")
+    if DISABLE_SPACEMIT_OPS:
+        return ()
     return (
         ("abs", _load_op("abs"), Autograd.disable),
         ("abs_", _load_op("abs", "abs_"), Autograd.disable),
@@ -112,6 +115,7 @@ def get_register_op_config():
         ("native_group_norm", _load_op("groupnorm", "group_norm"), Autograd.disable),
         ("gt.Tensor", _load_op("gt"), Autograd.disable),
         ("gt.Scalar", _load_op("gt", "gt_scalar"), Autograd.disable),
+        ("index_select", _load_op("index_select"), Autograd.disable),
         ("isinf", _load_op("isinf"), Autograd.disable),
         ("isnan", _load_op("isnan"), Autograd.disable),
         ("native_layer_norm", _load_op("layernorm", "layer_norm"), Autograd.disable),
@@ -229,6 +233,8 @@ class _DeviceWrapper:
         DeviceProperties = namedtuple("DeviceProperties", ["multi_processor_count"])
         return DeviceProperties(multi_processor_count=os.cpu_count() or 1)
 
+def empty_cache():
+    pass
 
 CUSTOMIZED_UNUSED_OPS = ()
 
