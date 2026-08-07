@@ -5,6 +5,47 @@ import triton.language.extra.smt as smt
 
 from flag_gems import runtime
 from flag_gems.utils import libentry, libtuner
+import triton.language.extra.spine_raw as tle
+from triton.language.extra.spine_raw import call as _sr_call
+from triton.language.extra.spine_raw import mem, index
+
+_f16 = tle.f16
+_f32 = tle.f32
+# NOTE: dtype args to tle.* must be bare names that match _DTYPE_NAMES
+# ({"f16","f32",...}). Use the un-prefixed aliases f16/f32 inside the raw
+# kernel body so the AST produces ast.Name("f32"), not ast.Name("_f32").
+f16 = _f16
+f32 = _f32
+
+
+# ---------------------------------------------------------------------------
+# M==1 GEMV fast path (vfwmacc, svector 1D)
+#   C[0, n:n+VL] = sum_k x[k] * W[k, n:n+VL]
+#   - x[k]    : scalar load (sload)
+#   - W[k, :] : contiguous row load (vload, VL=64 for f16)
+#   - acc     : vector<VL x f32>, scalar·vector broadcast + add per k
+# Bypasses smt.dot matrix unit (which SIGSEGVs on non-tile M). Each program
+# handles one VL-wide N-block; grid = (N // VL,).
+# ---------------------------------------------------------------------------
+@tle.raw_kernel
+def mm_m1_raw(x_ptr: mem(f16), W_ptr: mem(f16), C_ptr: mem(f16, out=True),
+              K: index, N: index, n_start: index):
+    nvl = tle.vconfig(-1, 1)
+    acc = tle.vzero(f32)
+    for k in tle.range(0, K, 1):
+        xk = tle.sload(x_ptr, k, dtype=f16)
+        xk_f = tle.cast(xk, f32)
+        wv = tle.vload(W_ptr, k * N + n_start, dtype=f16)
+        wv_f = tle.cast(wv, f32)
+        acc = acc + xk_f * wv_f
+    acc_h = tle.cast(acc, f16)
+    tle.vstore(C_ptr, n_start, acc_h)
+
+
+@triton.jit(do_not_specialize=["K", "N"])
+def _mm_m1_host(x, W, C, K, N, NB: tl.constexpr):
+    pid = tl.program_id(0)
+    _sr_call(mm_m1_raw, outputs=[], inputs=[x, W, C, K, N, pid * NB])
 
 
 @libentry()
@@ -226,31 +267,21 @@ def mm(a, b):
     _, N = b.shape
     # allocates output
     c = torch.empty((M, N), device=a.device, dtype=a.dtype)
-    # launch kernel
-    grid = lambda META: (
-        triton.cdiv(M, META["BLOCK_SIZE_M"]),
-        triton.cdiv(N, META["BLOCK_SIZE_N"]),
-    )
-    BLOCK_SIZE_K = triton.next_power_of_2(K)
-    SUB_BLK_K = min(512, BLOCK_SIZE_K)
-
-    mm_kernel[grid](
-        a,
-        b,
-        c,
-        M,
-        N,
-        K,
-        a.stride(0),
-        a.stride(1),
-        b.stride(0),
-        b.stride(1),
-        c.stride(0),
-        c.stride(1),
-        BLOCK_SIZE_K=BLOCK_SIZE_K,
-        SUB_BLK_K=SUB_BLK_K,
-    )
-    return c
+    # M==1 GEMV fast path: vfwmacc svector, bypasses smt.dot (which SIGSEGVs
+    # on non-tile M). Qwen decode hits this 100% (M=1, f16, N%64==0, K%64==0).
+    if (M == 1 and a.dtype == torch.float16
+            and a.is_contiguous() and b.is_contiguous()
+            and b.stride(1) == 1
+            and N % 64 == 0 and K % 64 == 0):
+        NB = 64
+        grid = (N // NB,)
+        _mm_m1_host[grid](a, b, c, K, N, NB=NB)
+        return c
+    # M>1: mm_kernel uses smt.dot which SIGSEGVs on non-tile-aligned M (prefill
+    # M=18, MICRO_M=16 → null store at vse16.v). Fall back to ATen native mm
+    # (torch.addmm beta=0 bypasses aten::mm dispatch — see _arm/ops/mm.py:540).
+    # Cannot call torch.mm() here (infinite recursion via torch.library override).
+    return torch.addmm(c, a, b, beta=0, alpha=1)
 
 
 def mm_out(a, b, *, out):
@@ -268,28 +299,17 @@ def mm_out(a, b, *, out):
     M, K = a.shape
     _, N = b.shape
 
-    # launch kernel
-    grid = lambda META: (
-        triton.cdiv(M, META["BLOCK_SIZE_M"]),
-        triton.cdiv(N, META["BLOCK_SIZE_N"]),
-    )
-    BLOCK_SIZE_K = triton.next_power_of_2(K)
-    SUB_BLK_K = min(512, BLOCK_SIZE_K)
+    # M==1 GEMV fast path (see mm() for rationale)
+    if (M == 1 and a.dtype == torch.float16
+            and a.is_contiguous() and b.is_contiguous()
+            and b.stride(1) == 1
+            and N % 64 == 0 and K % 64 == 0):
+        NB = 64
+        grid = (N // NB,)
+        _mm_m1_host[grid](a, b, out, K, N, NB=NB)
+        return out
 
-    mm_kernel[grid](
-        a,
-        b,
-        out,
-        M,
-        N,
-        K,
-        a.stride(0),
-        a.stride(1),
-        b.stride(0),
-        b.stride(1),
-        out.stride(0),
-        out.stride(1),
-        BLOCK_SIZE_K=BLOCK_SIZE_K,
-        SUB_BLK_K=SUB_BLK_K,
-    )
+    # M>1 fallback to ATen native (see mm() for rationale). Use addmm with
+    # out= to avoid infinite recursion via aten::mm.out dispatch.
+    torch.addmm(out, a, b, beta=0, alpha=1, out=out)
     return out
