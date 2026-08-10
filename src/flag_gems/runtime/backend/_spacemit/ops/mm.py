@@ -19,33 +19,42 @@ f32 = _f32
 
 
 # ---------------------------------------------------------------------------
-# M==1 GEMV fast path (vfwmacc, svector 1D)
+# M==1 GEMV fast path (true vfwmacc.vf intrinsic, pure llvm-direct sibling).
 #   C[0, n:n+VL] = sum_k x[k] * W[k, n:n+VL]
-#   - x[k]    : scalar load (sload)
-#   - W[k, :] : contiguous row load (vload, VL=64 for f16)
-#   - acc     : vector<VL x f32>, scalar·vector broadcast + add per k
-# Bypasses smt.dot matrix unit (which SIGSEGVs on non-tile M). Each program
-# handles one VL-wide N-block; grid = (N // VL,).
+#   - x[k]    : scalar f16 load (llvm.load)
+#   - W[k, :] : contiguous row vector load (llvm.load, vector<[4]xf16> = 64 f16)
+#   - acc     : vector<[4]xf32>, vfwmacc.vf (scalar·vector widening FMA) per k
+# Pure llvm-direct → routes to LLVMDirectTextCodegen sibling path, bypasses
+# spine-opt bufferization (which rejects llvm.call_intrinsic as "unknown memory
+# side effects"). program_id resolved at runtime via spine_grid(ctx, axis).
+# Output is f32 (vfwmacc accumulates in f32); host wrapper narrows to f16.
+# Each program handles one NB=64 N-block; grid = (N // NB,).
 # ---------------------------------------------------------------------------
 @tle.raw_kernel
-def mm_m1_raw(x_ptr: mem(f16), W_ptr: mem(f16), C_ptr: mem(f16, out=True),
-              K: index, N: index, n_start: index):
-    nvl = tle.vconfig(-1, 1)
-    acc = tle.vzero(f32)
+def mm_m1_raw(x_ptr: mem(f16), W_ptr: mem(f16), C_ptr: mem(f32, out=True),
+              K: index, N: index, NB: index):
+    vl = tle.llvm_const(64, "i64")
+    zero_i64 = tle.llvm_const(0, "i64")
+    zero_acc = tle.llvm_const(0.0, "vector<[4]xf32>")
+    xbase = tle.llvm_base_ptr(x_ptr)
+    wbase = tle.llvm_base_ptr(W_ptr)
+    cbase = tle.llvm_base_ptr(C_ptr)
+    n_start = tle.program_id(0) * NB
+    acc = zero_acc
     for k in tle.range(0, K, 1):
-        xk = tle.sload(x_ptr, k, dtype=f16)
-        xk_f = tle.cast(xk, f32)
-        wv = tle.vload(W_ptr, k * N + n_start, dtype=f16)
-        wv_f = tle.cast(wv, f32)
-        acc = acc + xk_f * wv_f
-    acc_h = tle.cast(acc, f16)
-    tle.vstore(C_ptr, n_start, acc_h)
+        gx = tle.llvm_gep(xbase, k, "f16")
+        xk = tle.call_intrinsic("llvm.load", [gx], result_type="f16")
+        gw = tle.llvm_gep(wbase, k * N + n_start, "f16")
+        wv = tle.call_intrinsic("llvm.load", [gw], result_type="vector<[4]xf16>")
+        acc = tle.call_intrinsic("llvm.riscv.vfwmacc.vf", [acc, xk, wv, zero_i64, vl, zero_i64],
+                                 result_type="vector<[4]xf32>")
+    gc = tle.llvm_gep(cbase, n_start, "f32")
+    tle.call_intrinsic("llvm.store", [acc, gc], result_type="()")
 
 
-@triton.jit(do_not_specialize=["K", "N"])
-def _mm_m1_host(x, W, C, K, N, NB: tl.constexpr):
-    pid = tl.program_id(0)
-    _sr_call(mm_m1_raw, outputs=[], inputs=[x, W, C, K, N, pid * NB])
+@triton.jit(do_not_specialize=["K", "N", "NB"])
+def _mm_m1_host(x, W, C, K, N, NB):
+    _sr_call(mm_m1_raw, outputs=[], inputs=[x, W, C, K, N, NB])
 
 
 @libentry()
@@ -267,15 +276,19 @@ def mm(a, b):
     _, N = b.shape
     # allocates output
     c = torch.empty((M, N), device=a.device, dtype=a.dtype)
-    # M==1 GEMV fast path: vfwmacc svector, bypasses smt.dot (which SIGSEGVs
-    # on non-tile M). Qwen decode hits this 100% (M=1, f16, N%64==0, K%64==0).
+    # M==1 GEMV fast path: true vfwmacc.vf intrinsic (pure llvm-direct sibling),
+    # bypasses smt.dot (which SIGSEGVs on non-tile M). Qwen decode hits this 100%
+    # (M=1, f16, N%64==0, K%64==0). Kernel writes f32 (vfwmacc accumulator);
+    # narrow to f16 on host.
     if (M == 1 and a.dtype == torch.float16
             and a.is_contiguous() and b.is_contiguous()
             and b.stride(1) == 1
             and N % 64 == 0 and K % 64 == 0):
         NB = 64
         grid = (N // NB,)
-        _mm_m1_host[grid](a, b, c, K, N, NB=NB)
+        c_f32 = torch.empty((1, N), device=a.device, dtype=torch.float32)
+        _mm_m1_host[grid](a, b, c_f32, K, N, NB=NB)
+        c = c_f32.half()
         return c
     # M>1: mm_kernel uses smt.dot which SIGSEGVs on non-tile-aligned M (prefill
     # M=18, MICRO_M=16 → null store at vse16.v). Fall back to ATen native mm
@@ -299,14 +312,17 @@ def mm_out(a, b, *, out):
     M, K = a.shape
     _, N = b.shape
 
-    # M==1 GEMV fast path (see mm() for rationale)
+    # M==1 GEMV fast path (see mm() for rationale). Kernel writes f32; narrow
+    # to the out tensor's dtype (f16) on host.
     if (M == 1 and a.dtype == torch.float16
             and a.is_contiguous() and b.is_contiguous()
             and b.stride(1) == 1
             and N % 64 == 0 and K % 64 == 0):
         NB = 64
         grid = (N // NB,)
-        _mm_m1_host[grid](a, b, out, K, N, NB=NB)
+        c_f32 = torch.empty((1, N), device=a.device, dtype=torch.float32)
+        _mm_m1_host[grid](a, b, c_f32, K, N, NB=NB)
+        out.copy_(c_f32.half())
         return out
 
     # M>1 fallback to ATen native (see mm() for rationale). Use addmm with
