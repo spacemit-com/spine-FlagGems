@@ -458,12 +458,16 @@ def mm_kernel(
 
 def _mm_transposed_tail(a, b, c, M, K, N):
     """vfwmacc fast path for transposed b (b.stride(0)==1, b=W.T).
-    Splits N into main tile (multiple of NB, vfwmacc) + tail (<NB cols, native addmm).
-    Writes into c (pre-allocated (M,N)). Returns True if fast path applied.
+    Splits N into main tile (multiple of NB, vfwmacc) + tail (vfwmacc with
+    shifted pointer views). Writes into c (pre-allocated (M,N)). Returns True.
 
     NB auto-bumped to keep grid <= 512 (K3 runtime limit: grid>512 corrupts —
     programs silently drop or write zeros). n_main=151552 (lm_head) with NB=512
-    gives grid=296. n_tail=384 handled by native addmm.
+    gives grid=296. n_tail=384 handled by vfwmacc kernel with grid=(1,), NB=n_tail.
+
+    Tail uses strided views b[:, n_main:] / c[:, n_main:] whose data_ptr is
+    shifted by n_main elements — kernel reads W[n_main+ni, ki] and writes
+    c[m, n_main+ni] correctly. Constraint: n_tail % 8 == 0 (kernel 8-col unroll).
     """
     GRID_LIMIT = 512
     NB = 256
@@ -479,11 +483,23 @@ def _mm_transposed_tail(a, b, c, M, K, N):
             grid = (n_main // NB,)
             _mm_mN_t_host[grid](a, b, c, M, K, n_main, NB=NB, CS=N)
     if n_tail > 0:
-        # tail: <NB cols, small FLOP, native addmm into strided c slice via temp.
+        # tail: vfwmacc kernel with shifted pointer views (no temp, no native addmm).
+        # b[:, n_main:] has stride (1, K) and data_ptr = b.data_ptr() + n_main*K*2,
+        # which is exactly W[n_main:, :] row-major — kernel's wbase[ni*K+ki] reads
+        # W[n_main+ni, ki]. c[:, n_main:] similarly shifts cbase so writes land at
+        # c[m, n_main+ni]. CS=N (full row stride) keeps c layout correct.
         b_tail = b[:, n_main:]
-        tmp = torch.empty(M, n_tail, dtype=a.dtype, device=a.device)
-        torch.addmm(tmp, a, b_tail, beta=0, alpha=1, out=tmp)
-        c[:, n_main:].copy_(tmp)
+        c_tail = c[:, n_main:]
+        if n_tail % 8 == 0:
+            if M == 1:
+                _mm_m1_t_host[(1,)](a, b_tail, c_tail, K, n_tail, NB=n_tail)
+            else:
+                _mm_mN_t_host[(1,)](a, b_tail, c_tail, M, K, n_tail, NB=n_tail, CS=N)
+        else:
+            # n_tail not multiple of 8: fall back to native addmm (rare).
+            tmp = torch.empty(M, n_tail, dtype=a.dtype, device=a.device)
+            torch.addmm(tmp, a, b_tail, beta=0, alpha=1, out=tmp)
+            c[:, n_main:].copy_(tmp)
     return True
 
 
