@@ -1,9 +1,15 @@
+import math
+
 import torch
 import triton
 import triton.language as tl
 import triton.language.extra.smt as smt
 
 from flag_gems import runtime
+from flag_gems.runtime.backend._spacemit.ops.attn_vfwmacc import (
+    _attn_qkt_gqa_host,
+    _attn_av_gqa_host,
+)
 from flag_gems.utils import libentry, libtuner
 
 
@@ -401,6 +407,72 @@ def flash_attention(
     return Attention.apply(query, key, value, scale, is_causal, enable_gqa)
 
 
+def _sdpa_vfwmacc_fast_path(q, k, v, scale, is_causal):
+    """vfwmacc GQA fast path for K3 (D=128, f16, B=1, GQA).
+
+    Mirrors the validated monkey-patch in bench_qwen_sdpa_override.py:
+    QKT kernel (per-head grid) + Python softmax + AV kernel (per-head grid).
+    GQA handled inside kernels via hk = hq // Nrep (skips repeat_kv).
+    """
+    B, Hq, Mq, D = q.shape
+    _, Hkv, Mk, _ = k.shape
+    n_rep = Hq // Hkv
+
+    qkt = torch.empty(B, Hq, Mq, Mk, dtype=q.dtype)
+    _attn_qkt_gqa_host[(Hq,)](
+        q.view(Hq, Mq, D), k.view(Hkv, Mk, D), qkt.view(Hq, Mq, Mk),
+        Mq, Mk, D, Hq, Hkv, n_rep,
+    )
+
+    if is_causal and Mq > 1:
+        attn_weights = qkt * scale
+        causal = torch.triu(
+            torch.full((Mq, Mk), float("-inf"), dtype=torch.float32,
+                       device=qkt.device),
+            diagonal=1,
+        )
+        attn_weights = attn_weights + causal
+        attn_weights = torch.nn.functional.softmax(
+            attn_weights, dim=-1, dtype=torch.float32
+        ).to(q.dtype)
+    else:
+        scale_h = qkt.new_tensor(scale)
+        attn_weights = torch.nn.functional.softmax(
+            qkt * scale_h, dim=-1, dtype=q.dtype
+        )
+
+    out = torch.empty(B, Hq, Mq, D, dtype=q.dtype)
+    _attn_av_gqa_host[(Hq,)](
+        attn_weights.view(Hq, Mq, Mk), v.view(Hkv, Mk, D), out.view(Hq, Mq, D),
+        Mq, Mk, D, Hq, Hkv, n_rep,
+    )
+    return out.transpose(1, 2).contiguous()
+
+
+def _sdpa_python_fallback(q, k, v, attn_mask, is_causal, scale):
+    """Non-recursive Python fallback (no aten.scaled_dot_product_attention call).
+
+    Uses matmul / softmax directly. GQA is handled by q @ k^T broadcasting
+    when Hq != Hkv (repeat_kv semantics via tensor expand on k/v).
+    """
+    if scale is None:
+        scale = 1.0 / math.sqrt(q.shape[-1])
+    if q.shape[1] != k.shape[1]:
+        n_rep = q.shape[1] // k.shape[1]
+        k = k.repeat_interleave(n_rep, dim=1)
+        v = v.repeat_interleave(n_rep, dim=1)
+    attn = (q.float() @ k.float().transpose(-2, -1)) * scale
+    if is_causal:
+        mask = torch.ones(q.shape[-2], k.shape[-2], dtype=torch.bool,
+                          device=q.device).tril()
+        attn = attn.masked_fill(~mask, float("-inf"))
+    if attn_mask is not None:
+        attn = attn + attn_mask.float()
+    attn = torch.softmax(attn, dim=-1)
+    out = attn @ v.float()
+    return out.to(q.dtype)
+
+
 def scaled_dot_product_attention(
     query,
     key,
@@ -411,7 +483,19 @@ def scaled_dot_product_attention(
     scale=None,
     enable_gqa=False,
 ):
-    query = query.clone().contiguous()
-    key = key.clone().contiguous()
-    value = value.clone().contiguous()
-    return Attention.apply(query, key, value, scale, is_causal, enable_gqa)
+    # Fast path: K3 vfwmacc GQA kernels (Qwen3 shape: D=128, f16, B=1, GQA)
+    B, Hq, Mq, D = query.shape
+    _, Hkv, Mk, _ = key.shape
+    if (query.dtype == torch.float16
+            and D == 128
+            and B == 1
+            and Hq % Hkv == 0
+            and query.is_contiguous()
+            and key.is_contiguous()
+            and value.is_contiguous()
+            and attn_mask is None
+            and dropout_p == 0.0):
+        sc = scale if scale is not None else (1.0 / math.sqrt(D))
+        return _sdpa_vfwmacc_fast_path(query, key, value, sc, is_causal)
+    # Fallback: manual Python path (avoids aten SDPA recursion)
+    return _sdpa_python_fallback(query, key, value, attn_mask, is_causal, scale)

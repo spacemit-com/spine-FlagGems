@@ -471,6 +471,7 @@ _FULL_CONFIG = (
     ("rsqrt_", rsqrt_),
     ("rsub.Scalar", rsub_scalar),
     ("rsub.Tensor", rsub_tensor),
+    ("scaled_dot_product_attention", scaled_dot_product_attention),
     ("scaled_softmax_backward", scaled_softmax_backward),
     ("scaled_softmax_forward", scaled_softmax_forward),
     ("scatter.reduce", scatter),
