@@ -252,6 +252,199 @@ def _mm_mN_t_host(a, W, C, M, K, N, NB, CS):
     _sr_call(mm_mN_t_raw, outputs=[], inputs=[a, W, C, M, K, N, NB, CS])
 
 
+# ---------------------------------------------------------------------------
+# tl.dot mm kernel (standard Triton dot, spine-mlir-main-rv64 lowering).
+#   Fallback for M>1 prefill when smt.dot path unavailable. Requires b_contig.
+#   1.27x-2.42x faster than vfwmacc.vv. smt.dot path is 4x faster than this.
+# ---------------------------------------------------------------------------
+@triton.jit
+def mm_tldot_kernel(
+    a_ptr, b_ptr, c_ptr,
+    M, N, K,
+    stride_am, stride_ak, stride_bk, stride_bn, stride_cm, stride_cn,
+    BLOCK_M: tl.constexpr, BLOCK_N: tl.constexpr, BLOCK_K: tl.constexpr,
+):
+    pid_m = tl.program_id(0)
+    pid_n = tl.program_id(1)
+    acc = tl.zeros((BLOCK_M, BLOCK_N), dtype=tl.float32)
+    for ki in range(0, tl.cdiv(K, BLOCK_K)):
+        a_bp = tl.make_block_ptr(
+            base=a_ptr, shape=(M, K), strides=(stride_am, stride_ak),
+            offsets=(pid_m * BLOCK_M, ki * BLOCK_K),
+            block_shape=(BLOCK_M, BLOCK_K), order=(1, 0))
+        b_bp = tl.make_block_ptr(
+            base=b_ptr, shape=(K, N), strides=(stride_bk, stride_bn),
+            offsets=(ki * BLOCK_K, pid_n * BLOCK_N),
+            block_shape=(BLOCK_K, BLOCK_N), order=(1, 0))
+        a = tl.load(a_bp, boundary_check=(0, 1))
+        b = tl.load(b_bp, boundary_check=(0, 1))
+        acc += tl.dot(a, b)
+    c_bp = tl.make_block_ptr(
+        base=c_ptr, shape=(M, N), strides=(stride_cm, stride_cn),
+        offsets=(pid_m * BLOCK_M, pid_n * BLOCK_N),
+        block_shape=(BLOCK_M, BLOCK_N), order=(1, 0))
+    tl.store(c_bp, acc.to(c_ptr.dtype.element_ty), boundary_check=(0, 1))
+
+
+# ---------------------------------------------------------------------------
+# smt.dot mm kernel (K3 matrix engine via linalg.mmt4d). Fastest path.
+#   K-loop with unpack-before-accumulate: smt.dot returns packed MICRO-tile
+#   result; must smt.view(..., (1,1)) to unpack to plain tensor before +=.
+#   Direct packed accumulate (acc += smt.dot(a,b) without unpack) produces
+#   wrong results — tl.zeros+smt.view init creates incompatible tensor format.
+#   BK=256 fixed (K3 MICRO_K=8, 32 K-tiles per BK). 4x faster than tl.dot.
+#   TCM ~256KB (within 384KB limit); noloop BK=K variant needed 608KB (over).
+# ---------------------------------------------------------------------------
+@triton.jit
+def mm_smt_kernel(
+    a_ptr, b_ptr, c_ptr,
+    M, N, K,
+    stride_am, stride_ak, stride_bk, stride_bn, stride_cm, stride_cn,
+    BLOCK_SIZE_M: tl.constexpr, BLOCK_SIZE_N: tl.constexpr, BLOCK_SIZE_K: tl.constexpr,
+    MICRO_M: tl.constexpr, MICRO_K: tl.constexpr, MICRO_N: tl.constexpr,
+):
+    pid_m = tl.program_id(0)
+    pid_n = tl.program_id(1)
+    acc = tl.zeros((BLOCK_SIZE_M, BLOCK_SIZE_N), dtype=tl.float32)
+    for ki in tl.range(0, tl.cdiv(K, BLOCK_SIZE_K)):
+        a_bp = tl.make_block_ptr(
+            base=a_ptr, shape=[M, K], strides=[stride_am, stride_ak],
+            offsets=[pid_m * BLOCK_SIZE_M, ki * BLOCK_SIZE_K],
+            block_shape=[BLOCK_SIZE_M, BLOCK_SIZE_K], order=[1, 0])
+        b_bp = tl.make_block_ptr(
+            base=b_ptr, shape=[K, N], strides=[stride_bk, stride_bn],
+            offsets=[ki * BLOCK_SIZE_K, pid_n * BLOCK_SIZE_N],
+            block_shape=[BLOCK_SIZE_K, BLOCK_SIZE_N], order=[1, 0])
+        a_desc = smt.descriptor_load(a_bp, (0, 0))
+        a = smt.view(a_desc, (0, 0), (BLOCK_SIZE_M, BLOCK_SIZE_K), (MICRO_M, MICRO_K))
+        b_desc = smt.descriptor_load(b_bp, (0, 0))
+        b = smt.view(b_desc, (0, 0), (BLOCK_SIZE_K, BLOCK_SIZE_N), (MICRO_K, MICRO_N))
+        partial = smt.dot(a, b)
+        partial = smt.view(partial, (0, 0), (BLOCK_SIZE_M, BLOCK_SIZE_N), (1, 1))
+        acc += partial
+    c = acc.to(c_ptr.dtype.element_ty)
+    c_bp = tl.make_block_ptr(
+        base=c_ptr, shape=[M, N], strides=[stride_cm, stride_cn],
+        offsets=[pid_m * BLOCK_SIZE_M, pid_n * BLOCK_SIZE_N],
+        block_shape=[BLOCK_SIZE_M, BLOCK_SIZE_N], order=[1, 0])
+    tl.store(c_bp, c, boundary_check=(0, 1))
+
+
+_TLDOT_BK = 256
+_TLDOT_BM = 32
+_SMT_BK = 256
+_SMT_BM = 32
+_SMT_MM, _SMT_MK, _SMT_MN = 16, 8, 32  # K3 (0xA064) f16 MICRO tile from config_pre_hook
+
+# Cache b_contig (= W.T materialized) by weight data_ptr. Weights are stable
+# across forward passes in inference, so the cache hits after the first call.
+# Keyed by (data_ptr, shape, stride) to be safe against tensor reuse.
+_b_contig_cache = {}
+
+
+def _get_b_contig(b):
+    key = (b.data_ptr(), b.shape, b.stride())
+    cached = _b_contig_cache.get(key)
+    if cached is not None:
+        return cached
+    bc = b.contiguous()
+    if len(_b_contig_cache) < 256:
+        _b_contig_cache[key] = bc
+    return bc
+
+
+def _pick_smt_bn(N):
+    """Per-shape BN. 256 for N>=2048, else 64. BN=512 crashes the kernel
+    (tile size limit, rule 53 pattern) so large N is handled by chunked
+    launches in _mm_smt_path instead of bumping BN."""
+    if N >= 2048:
+        return 256
+    return 64
+
+
+# BN=256, max grid_n=512 → max cols per kernel launch (rule 56: grid>512 corrupts).
+_SMT_MAX_COLS_PER_LAUNCH = 256 * 512  # 131072
+
+
+def _mm_smt_path(a, b, c, M, K, N):
+    """smt.dot matrix-engine fast path for M>1 prefill. 4x faster than tl.dot
+    for proj mm shapes (N≤4096). For very large N (lm_head N=151936) chunked
+    launch with BN=256 is slower than vfwmacc.vv NB=512 (smt.dot BN=512 crashes
+    — matrix engine tile limit stricter than vector unit), so caller skips
+    smt.dot when N > _SMT_MAX_COLS_PER_LAUNCH.
+
+    Returns True on success, False to fall back. Handles arbitrary N via
+    chunked launches (each ≤131072 cols, BN=256) + per-chunk main/tail split."""
+    bn = _pick_smt_bn(N)
+    if bn == 0:
+        return False
+    if N > _SMT_MAX_COLS_PER_LAUNCH:
+        # Chunked smt.dot would be slower than vfwmacc.vv NB=512 — let caller fall back.
+        return False
+    grid_m = (M + _SMT_BM - 1) // _SMT_BM
+    b_contig = _get_b_contig(b)
+    n_done = 0
+    while n_done < N:
+        chunk_n = min(_SMT_MAX_COLS_PER_LAUNCH, N - n_done)
+        n_main = (chunk_n // bn) * bn
+        n_tail = chunk_n - n_main
+        if n_main > 0:
+            grid_n = n_main // bn
+            if grid_m * grid_n > 512:
+                return False
+            a_chunk = a
+            b_chunk = b_contig[:, n_done:n_done + n_main]
+            c_chunk = c[:, n_done:n_done + n_main]
+            mm_smt_kernel[(grid_m, grid_n)](
+                a_chunk, b_chunk, c_chunk, M, n_main, K,
+                a_chunk.stride(0), a_chunk.stride(1),
+                b_chunk.stride(0), b_chunk.stride(1),
+                c_chunk.stride(0), c_chunk.stride(1),
+                BLOCK_SIZE_M=_SMT_BM, BLOCK_SIZE_N=bn, BLOCK_SIZE_K=_SMT_BK,
+                MICRO_M=_SMT_MM, MICRO_K=_SMT_MK, MICRO_N=_SMT_MN,
+            )
+        if n_tail > 0:
+            # Tail: native addmm. Rare (N%256 != 0).
+            c_tail = c[:, n_done + n_main:n_done + n_main + n_tail]
+            b_tail = b_contig[:, n_done + n_main:n_done + n_main + n_tail]
+            torch.addmm(c_tail, a, b_tail, beta=0, alpha=1, out=c_tail)
+        n_done += chunk_n
+    return True
+
+
+def _pick_tldot_bn(N):
+    """Per-shape BN from sweep. Returns 0 if N too large (fall back).
+    N>4096 falls back (BN=512 crashes tl.dot too — same K3 tile limit as smt.dot;
+    vfwmacc.vv handles large N via _mm_transposed_tail)."""
+    if N <= 1024:
+        return 64
+    elif N <= 2048:
+        return 256
+    elif N <= 4096:
+        return 128
+    return 0
+
+
+def _mm_tldot_path(a, b, c, M, K, N):
+    """tl.dot fallback for M>1 prefill. Materializes b_contig=W.T (K,N) row-major
+    (cached). Returns True on success, False to fall back. Only for proj mms."""
+    bn = _pick_tldot_bn(N)
+    if bn == 0:
+        return False
+    grid_m = (M + _TLDOT_BM - 1) // _TLDOT_BM
+    grid_n = (N + bn - 1) // bn
+    if grid_m * grid_n > 512:
+        return False
+    b_contig = _get_b_contig(b)
+    mm_tldot_kernel[(grid_m, grid_n)](
+        a, b_contig, c, M, N, K,
+        a.stride(0), a.stride(1), b_contig.stride(0), b_contig.stride(1),
+        c.stride(0), c.stride(1),
+        BLOCK_M=_TLDOT_BM, BLOCK_N=bn, BLOCK_K=_TLDOT_BK,
+    )
+    return True
+
+
 @libentry()
 @libtuner(
     configs=runtime.get_tuned_config("mm_spacemit"),
@@ -530,8 +723,13 @@ def mm(a, b):
                 _mm_transposed_tail(a, b, c, M, K, N)
                 return c
         else:
-            # M>1 prefill: vfwmacc.vv with M-row loop, transposed b only.
+            # M>1 prefill: try smt.dot (matrix engine, 4x faster) first,
+            # fall back to tl.dot, then vfwmacc. Only for proj mms (N<=4096).
             if b.stride(0) == 1 and N % 8 == 0:
+                if _mm_smt_path(a, b, c, M, K, N):
+                    return c
+                if _mm_tldot_path(a, b, c, M, K, N):
+                    return c
                 _mm_transposed_tail(a, b, c, M, K, N)
                 return c
     # Fallback: ATen native mm. torch.addmm beta=0 bypasses aten::mm dispatch
@@ -559,6 +757,10 @@ def mm_out(a, b, *, out):
                 return out
         else:
             if b.stride(0) == 1 and N % 8 == 0:
+                if _mm_smt_path(a, b, out, M, K, N):
+                    return out
+                if _mm_tldot_path(a, b, out, M, K, N):
+                    return out
                 _mm_transposed_tail(a, b, out, M, K, N)
                 return out
 
