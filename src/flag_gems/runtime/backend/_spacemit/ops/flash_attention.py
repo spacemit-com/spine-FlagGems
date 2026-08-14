@@ -446,7 +446,7 @@ def _sdpa_vfwmacc_fast_path(q, k, v, scale, is_causal):
         attn_weights.view(Hq, Mq, Mk), v.view(Hkv, Mk, D), out.view(Hq, Mq, D),
         Mq, Mk, D, Hq, Hkv, n_rep,
     )
-    return out.transpose(1, 2).contiguous()
+    return out
 
 
 def _sdpa_python_fallback(q, k, v, attn_mask, is_causal, scale):
@@ -499,3 +499,41 @@ def scaled_dot_product_attention(
         return _sdpa_vfwmacc_fast_path(query, key, value, sc, is_causal)
     # Fallback: manual Python path (avoids aten SDPA recursion)
     return _sdpa_python_fallback(query, key, value, attn_mask, is_causal, scale)
+
+
+def scaled_dot_product_flash_attention_for_cpu(
+    query,
+    key,
+    value,
+    dropout_p=0.0,
+    is_causal=False,
+    *,
+    attn_mask=None,
+    scale=None,
+):
+    """Bridge: aten::_scaled_dot_product_flash_attention_for_cpu → FlagGems SDPA.
+
+    Inductor decomposes `aten::scaled_dot_product_attention` (CompositeImplicitAutograd)
+    down to `aten::_scaled_dot_product_flash_attention_for_cpu` during FakeTensor tracing,
+    bypassing FlagGems' CPU registration. Registering this wrapper on the decomposed op
+    routes Inductor-compiled graphs back through FlagGems SDPA.
+
+    Native op returns (output, attn_matrix); we return (output, None) since FlagGems
+    SDPA does not compute the attention matrix.
+
+    The 4D attn_mask passed by HF's sdpa_attention_forward is a standard causal mask
+    (0 on/below diagonal, -inf above) for Qwen3 prefill without padding, and all-zeros
+    for decode (Mq=1). We convert: Mq==1 → is_causal=False; Mq>1 → is_causal=True.
+    """
+    Mq = query.shape[2]
+    if attn_mask is not None:
+        is_causal = (Mq > 1)
+        attn_mask = None
+    out = scaled_dot_product_attention(
+        query, key, value,
+        attn_mask=attn_mask,
+        dropout_p=dropout_p,
+        is_causal=is_causal,
+        scale=scale,
+    )
+    return (out, None)

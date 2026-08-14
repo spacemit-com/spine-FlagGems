@@ -472,6 +472,7 @@ _FULL_CONFIG = (
     ("rsub.Scalar", rsub_scalar),
     ("rsub.Tensor", rsub_tensor),
     ("scaled_dot_product_attention", scaled_dot_product_attention),
+    ("_scaled_dot_product_flash_attention_for_cpu", scaled_dot_product_flash_attention_for_cpu),
     ("scaled_softmax_backward", scaled_softmax_backward),
     ("scaled_softmax_forward", scaled_softmax_forward),
     ("scatter.reduce", scatter),
@@ -597,6 +598,19 @@ for _alias, _target in (
 ):
     if _target in FULL_CONFIG_BY_FUNC:
         FULL_CONFIG_BY_FUNC.setdefault(_alias, []).extend(FULL_CONFIG_BY_FUNC[_target])
+
+# Also key by op_name (e.g. "mm.out") so use_gems(include=["mm.out"]) works.
+# Without this, only the func_name key (e.g. "mm_out") exists, and users who
+# pass the op_name form silently get zero registrations. This caused Inductor's
+# extern_kernels.mm(a, b, out=buf) → aten::mm.out to bypass FlagGems entirely.
+for _item in _FULL_CONFIG:
+    if not _item or len(_item) < 2:
+        continue
+    _op_name = _item[0]
+    _fn = _item[1]
+    _func_name = _fn.__name__ if hasattr(_fn, "__name__") else str(_fn)
+    if _op_name != _func_name and _op_name not in FULL_CONFIG_BY_FUNC:
+        FULL_CONFIG_BY_FUNC[_op_name] = list(FULL_CONFIG_BY_FUNC.get(_func_name, []))
 
 
 def enable(

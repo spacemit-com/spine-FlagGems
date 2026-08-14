@@ -54,6 +54,8 @@ class GeneralOpRegistrar:
         # Simple fast path: if we have a full_config_by_func mapping, iterate
         # over the requested function names and collect matching config items.
         self.include_config = []
+        # Dedup by op_name so passing both "mm" and "mm.out" doesn't double-register
+        seen_op_names = set()
 
         if self.full_config_by_func:
             for name in self.include_ops:
@@ -64,6 +66,9 @@ class GeneralOpRegistrar:
                         continue
                     if op_name in self.cpp_patched_ops:
                         continue
+                    if op_name in seen_op_names:
+                        continue
+                    seen_op_names.add(op_name)
                     self.include_config.append(self._normalized_config(config_item))
         else:
             # fallback: scan provided config and match by func name or op name
@@ -79,6 +84,9 @@ class GeneralOpRegistrar:
                     continue
                 if op_name in self.cpp_patched_ops:
                     continue
+                if op_name in seen_op_names:
+                    continue
+                seen_op_names.add(op_name)
                 self.include_config.append(self._normalized_config(config_item))
 
         if not self.include_config:

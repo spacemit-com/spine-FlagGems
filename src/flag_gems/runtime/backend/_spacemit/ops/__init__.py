@@ -8,7 +8,11 @@ from .bmm import bmm, bmm_out
 # from .thnn_conv2d import thnn_conv2d
 # from .conv_depthwise2d import _conv_depthwise2d
 # from .flash_attention import flash_attention, scaled_dot_product_attention
-from .flash_attention import flash_attention, scaled_dot_product_attention
+from .flash_attention import (
+    flash_attention,
+    scaled_dot_product_attention,
+    scaled_dot_product_flash_attention_for_cpu,
+)
 from .gelu import gelu, gelu_, gelu_backward
 from .layernorm import layer_norm
 from .mean import global_avg_pool, mean_dim
