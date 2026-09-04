@@ -404,10 +404,15 @@ def _mm_smt_path(a, b, c, M, K, N):
                 MICRO_M=_SMT_MM, MICRO_K=_SMT_MK, MICRO_N=_SMT_MN,
             )
         if n_tail > 0:
-            # Tail: native addmm. Rare (N%256 != 0).
+            # Tail: native addmm into a contiguous temp. Rare (N%256 != 0).
+            # Do NOT zero_/addmm the c_tail view in place: the FlagGems `zero`
+            # op ignores strides (flat fill) and would clobber the main tile,
+            # and addmm's kernel loads self unconditionally (0*NaN = NaN).
             c_tail = c[:, n_done + n_main:n_done + n_main + n_tail]
             b_tail = b_contig[:, n_done + n_main:n_done + n_main + n_tail]
-            torch.addmm(c_tail, a, b_tail, beta=0, alpha=1, out=c_tail)
+            tmp = torch.zeros(M, n_tail, dtype=a.dtype, device=a.device)
+            torch.addmm(tmp, a, b_tail, beta=0, alpha=1, out=tmp)
+            c_tail.copy_(tmp)
         n_done += chunk_n
     return True
 
@@ -690,7 +695,8 @@ def _mm_transposed_tail(a, b, c, M, K, N):
                 _mm_mN_t_host[(1,)](a, b_tail, c_tail, M, K, n_tail, NB=n_tail, CS=N)
         else:
             # n_tail not multiple of 8: fall back to native addmm (rare).
-            tmp = torch.empty(M, n_tail, dtype=a.dtype, device=a.device)
+            # zeros, not empty: FlagGems addmm loads self unconditionally
+            tmp = torch.zeros(M, n_tail, dtype=a.dtype, device=a.device)
             torch.addmm(tmp, a, b_tail, beta=0, alpha=1, out=tmp)
             c[:, n_main:].copy_(tmp)
     return True
@@ -735,6 +741,10 @@ def mm(a, b):
     # Fallback: ATen native mm. torch.addmm beta=0 bypasses aten::mm dispatch
     # (see _arm/ops/mm.py:540). Cannot call torch.mm() (infinite recursion via
     # torch.library override). Handles non-f16, non-contiguous, non-tile-aligned.
+    # zero first (c is our own contiguous alloc — flat fill is safe): under
+    # use_gems the overridden addmm kernel loads self unconditionally
+    # (acc*alpha + bias*beta), so uninit NaN leaks via 0*NaN.
+    c.zero_()
     return torch.addmm(c, a, b, beta=0, alpha=1)
 
 
@@ -764,5 +774,14 @@ def mm_out(a, b, *, out):
                 _mm_transposed_tail(a, b, out, M, K, N)
                 return out
 
-    torch.addmm(out, a, b, beta=0, alpha=1, out=out)
+    # zero first (same uninit-self NaN hazard as mm() fallback above); out may
+    # be a non-contiguous caller tensor — the overridden `zero` op flat-fills
+    # and would clobber memory beyond a strided out, so go through a temp.
+    if out.is_contiguous():
+        out.zero_()
+        torch.addmm(out, a, b, beta=0, alpha=1, out=out)
+    else:
+        tmp = torch.zeros((M, N), dtype=a.dtype, device=a.device)
+        torch.addmm(tmp, a, b, beta=0, alpha=1, out=tmp)
+        out.copy_(tmp)
     return out
