@@ -4,6 +4,7 @@ import torch
 import triton
 import triton.language as tl
 
+from flag_gems.ops.softmax import softmax as general_softmax
 from flag_gems.ops.softmax import softmax_backward as common_softmax_backward
 from flag_gems.utils import tl_extra_shim
 
@@ -112,6 +113,12 @@ def softmax(self, dim, half_to_float=False):
 
     assert dim >= -self.ndim and dim < self.ndim, "Invalid dim"
     dim = dim % self.ndim
+
+    # this port's kernel only reduces the last dim; anything else must go to
+    # the general implementation (last-dim-only reduction silently produces
+    # wrong values for dim < ndim-1, e.g. (1,256) dim=0)
+    if dim != self.ndim - 1:
+        return general_softmax(self, dim, half_to_float)
 
     if half_to_float:
         dtype = torch.float32

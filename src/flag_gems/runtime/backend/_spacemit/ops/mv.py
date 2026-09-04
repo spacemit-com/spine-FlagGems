@@ -32,7 +32,9 @@ def mv_kernel(
 ):
     pid = tl.program_id(0)
     block_start_n = pid * BLOCK_N
-    acc = tl.zeros((BLOCK_N, BLOCK_M), dtype=A.dtype.element_ty)
+    # f32 accumulator (matches mainline ops/mv.py): f16 partial-sum accumulation
+    # over M blocks exceeds tolerance (test_mv 160-1024 fp16)
+    acc = tl.zeros((BLOCK_N, BLOCK_M), dtype=tl.float32)
 
     for m in range(0, M, BLOCK_M):
         a_block_ptr = tl.make_block_ptr(
@@ -43,7 +45,7 @@ def mv_kernel(
             block_shape=[BLOCK_N, BLOCK_M],
             order=[1, 0],
         )
-        a = tl.load(a_block_ptr, boundary_check=(0, 1)).to(A.dtype.element_ty)
+        a = tl.load(a_block_ptr, boundary_check=(0, 1)).to(tl.float32)
 
         b_block_ptr = tl.make_block_ptr(
             base=B,
@@ -53,7 +55,7 @@ def mv_kernel(
             block_shape=[BLOCK_M],
             order=[0],
         )
-        b = tl.load(b_block_ptr, boundary_check=(0,)).to(A.dtype.element_ty)
+        b = tl.load(b_block_ptr, boundary_check=(0,)).to(tl.float32)
         acc += a * b[None, :]
 
     result = tl.sum(acc, axis=1)
