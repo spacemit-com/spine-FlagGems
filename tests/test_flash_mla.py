@@ -81,6 +81,7 @@ def ref_mla(
     return out, lse
 
 
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="requires cuda")
 @pytest.mark.skipif(vendor_name == "hygon", reason="Issue #2817: RuntimeError")
 @pytest.mark.flash_mla
 @pytest.mark.parametrize("seqlen", [1024, 2048, 4096, 8192])

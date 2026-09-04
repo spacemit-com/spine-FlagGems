@@ -20,6 +20,7 @@ FFT_SHAPES = [
 
 @pytest.mark.fft
 @pytest.mark.parametrize("shape", FFT_SHAPES)
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="requires cuda")
 def test_fft(shape):
     m, n = shape
     real = torch.randn((m, n), device=flag_gems.device, dtype=torch.float32)

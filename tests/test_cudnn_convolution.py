@@ -27,6 +27,7 @@ else:
 @pytest.mark.parametrize("padding", [0, 1])
 @pytest.mark.parametrize("dtype", FLOAT_DTYPES)
 @pytest.mark.parametrize("dilation", [1, 2])
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="requires cuda")
 def test_cudnn_convolution_2d(
     shape, kernel, stride, padding, groups, dtype, dilation, monkeypatch
 ):
@@ -78,6 +79,7 @@ else:
 @pytest.mark.parametrize("stride", [1, 2])
 @pytest.mark.parametrize("padding", [0, 1])
 @pytest.mark.parametrize("dtype", FLOAT_DTYPES)
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="requires cuda")
 def test_cudnn_convolution_1d(shape, kernel, stride, padding, dtype, monkeypatch):
     inp = torch.randn(shape, dtype=dtype, device=flag_gems.device)
     weight = torch.randn(kernel, dtype=dtype, device=flag_gems.device)
@@ -127,6 +129,7 @@ else:
 @pytest.mark.parametrize("padding", [0, 1])
 @pytest.mark.parametrize("dtype", FLOAT_DTYPES)
 @pytest.mark.parametrize("dilation", [1, 2])
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="requires cuda")
 def test_cudnn_convolution_3d(
     shape, kernel, stride, padding, groups, dtype, dilation, monkeypatch
 ):

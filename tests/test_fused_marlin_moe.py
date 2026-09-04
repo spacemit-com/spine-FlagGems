@@ -466,6 +466,7 @@ def _minimal_args(device="cuda", dtype=torch.bfloat16):
     return _make_inputs(M, E, K, N, topk, dtype, device)
 
 
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="requires cuda")
 def test_rejects_unsupported_quant_type():
     hs, w1_q, w2_q, _, _, tw, ti, w1s, w2s = _minimal_args()
     with pytest.raises(NotImplementedError, match="quant_type_id"):
@@ -483,6 +484,7 @@ def test_rejects_unsupported_quant_type():
         )
 
 
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="requires cuda")
 def test_rejects_act_order():
     hs, w1_q, w2_q, _, _, tw, ti, w1s, w2s = _minimal_args()
     g_idx = torch.zeros(8, dtype=torch.long, device=hs.device)
@@ -502,6 +504,7 @@ def test_rejects_act_order():
         )
 
 
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="requires cuda")
 def test_rejects_fp8_input_dtype():
     hs, w1_q, w2_q, _, _, tw, ti, w1s, w2s = _minimal_args()
     with pytest.raises(NotImplementedError, match="FP8"):

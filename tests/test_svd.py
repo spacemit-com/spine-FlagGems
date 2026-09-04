@@ -63,6 +63,17 @@ def _assert_orthonormal(actual, atol=2e-2):
 
 @pytest.mark.svd
 @pytest.mark.parametrize("shape", utils.SVD_FAST_SHAPES)
+
+def _lapack_available():
+    try:
+        torch.linalg.svd(torch.eye(4, dtype=torch.float64))
+        return True
+    except Exception:
+        return False
+
+
+LAPACK_AVAILABLE = _lapack_available()
+@pytest.mark.skipif(not LAPACK_AVAILABLE, reason="torch built without LAPACK")
 def test_accuracy_svd_fast_float32(shape):
     inp = _make_input(shape, torch.float32)
     ref_inp = utils.to_reference(inp, False)
@@ -83,6 +94,7 @@ def test_accuracy_svd_fast_float32(shape):
 
 @pytest.mark.svd
 @pytest.mark.parametrize("shape", utils.SVD_RANK1_SHAPES)
+@pytest.mark.skipif(not LAPACK_AVAILABLE, reason="torch built without LAPACK")
 def test_accuracy_svd_rank1_float32(shape):
     inp = _make_input(shape, torch.float32)
     ref_inp = utils.to_reference(inp, False)
@@ -101,6 +113,7 @@ def test_accuracy_svd_rank1_float32(shape):
 
 @pytest.mark.svd
 @pytest.mark.parametrize("shape", utils.SVD_RANK1_SHAPES)
+@pytest.mark.skipif(not LAPACK_AVAILABLE, reason="torch built without LAPACK")
 def test_accuracy_svd_rank1_zero_basis(shape):
     inp = torch.zeros(shape, dtype=torch.float32, device=flag_gems.device)
 
@@ -121,6 +134,7 @@ def test_accuracy_svd_rank1_zero_basis(shape):
 
 @pytest.mark.svd
 @pytest.mark.parametrize("shape", utils.SVD_GRAM_ILL_CONDITIONED_SHAPES)
+@pytest.mark.skipif(not LAPACK_AVAILABLE, reason="torch built without LAPACK")
 def test_accuracy_svd_gram_ill_conditioned_orthonormal(shape):
     k = min(shape[-2:])
     singular_values = torch.logspace(0, -5, steps=k).tolist()
@@ -143,6 +157,7 @@ def test_accuracy_svd_gram_ill_conditioned_orthonormal(shape):
 
 @pytest.mark.svd
 @pytest.mark.parametrize("case", ["zero", "repeated"])
+@pytest.mark.skipif(not LAPACK_AVAILABLE, reason="torch built without LAPACK")
 def test_accuracy_svd_gram_zero_and_repeated_singular_values(case):
     if case == "zero":
         inp = torch.zeros((17, 17), dtype=torch.float32, device=flag_gems.device)
@@ -166,6 +181,7 @@ def test_accuracy_svd_gram_zero_and_repeated_singular_values(case):
 
 @pytest.mark.svd
 @pytest.mark.parametrize("case", utils.SVD_TINY_RANK_DEGENERATE_CASES)
+@pytest.mark.skipif(not LAPACK_AVAILABLE, reason="torch built without LAPACK")
 def test_accuracy_svd_tiny_rank_degenerate_inputs(case):
     if case == "zero_2x2":
         inp = torch.zeros((2, 2), dtype=torch.float32, device=flag_gems.device)
@@ -205,6 +221,7 @@ def test_accuracy_svd_tiny_rank_degenerate_inputs(case):
 @pytest.mark.svd
 @pytest.mark.parametrize("shape", [(1025, 2), (2, 1025)])
 @pytest.mark.parametrize("case", ["zero", "rankdef", "scaled"])
+@pytest.mark.skipif(not LAPACK_AVAILABLE, reason="torch built without LAPACK")
 def test_accuracy_svd_rank2_boundary_degenerate_inputs(shape, case):
     if case == "zero":
         inp = torch.zeros(shape, dtype=torch.float32, device=flag_gems.device)
@@ -241,6 +258,7 @@ def test_accuracy_svd_rank2_boundary_degenerate_inputs(shape, case):
 @pytest.mark.svd
 @pytest.mark.parametrize("shape", utils.SVD_FALLBACK_SHAPES)
 @pytest.mark.parametrize("some", [True, False])
+@pytest.mark.skipif(not LAPACK_AVAILABLE, reason="torch built without LAPACK")
 def test_accuracy_svd_fallback_modes(shape, some):
     inp = _make_input(shape, torch.float32)
     ref_inp = utils.to_reference(inp, False)
@@ -256,6 +274,7 @@ def test_accuracy_svd_fallback_modes(shape, some):
 
 
 @pytest.mark.svd
+@pytest.mark.skipif(not LAPACK_AVAILABLE, reason="torch built without LAPACK")
 def test_accuracy_svd_non_contiguous_empty_and_complex():
     inputs = [
         _make_input((3, 5), torch.float32).mT,
@@ -278,6 +297,7 @@ def test_accuracy_svd_non_contiguous_empty_and_complex():
 
 @pytest.mark.svd
 @pytest.mark.parametrize("shape", [(3, 3), (2, 3, 3)])
+@pytest.mark.skipif(not LAPACK_AVAILABLE, reason="torch built without LAPACK")
 def test_accuracy_svd_complex64_reconstruction(shape):
     inp = _make_input(shape, torch.complex64)
     ref_inp = utils.to_reference(inp, False)
@@ -296,6 +316,7 @@ def test_accuracy_svd_complex64_reconstruction(shape):
 
 @pytest.mark.svd
 @pytest.mark.parametrize("dtype", [torch.float16, torch.bfloat16])
+@pytest.mark.skipif(not LAPACK_AVAILABLE, reason="torch built without LAPACK")
 def test_accuracy_svd_low_precision_float32_route(dtype):
     if dtype is torch.bfloat16 and not utils.bf16_is_supported:
         pytest.skip("bfloat16 is not supported on this device")
@@ -324,6 +345,7 @@ def test_accuracy_svd_low_precision_float32_route(dtype):
 
 @pytest.mark.svd
 @pytest.mark.parametrize("shape", [(3, 5), (5, 3), (4, 4)])
+@pytest.mark.skipif(not LAPACK_AVAILABLE, reason="torch built without LAPACK")
 def test_accuracy_svd_some_false_reconstruction(shape):
     inp = _make_input(shape, torch.float32)
     ref_inp = utils.to_reference(inp, False)

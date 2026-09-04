@@ -23,6 +23,7 @@ def replace_zeros(inp):
         (torch.int32, torch.int32),
     ],
 )
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="requires cuda")
 def test_floor_divide_mixed(dtype1, dtype2):
     if dtype1.is_floating_point:
         x = torch.randn(128, device="cuda", dtype=dtype1)
@@ -52,6 +53,7 @@ def test_floor_divide_mixed(dtype1, dtype2):
         (torch.float32, torch.float32),
     ],
 )
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="requires cuda")
 def test_floor_divide_scalar_tensor(x_dtype, y_dtype):
     def make_tensor(shape, dtype):
         if dtype.is_floating_point:

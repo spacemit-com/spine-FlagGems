@@ -53,6 +53,7 @@ def convert_fp8(
 )
 @pytest.mark.parametrize("kv_cache_dtype", ["auto"])
 @torch.inference_mode()
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="requires cuda")
 def test_concat_and_cache_mla(
     kv_lora_rank: int,
     qk_rope_head_dim: int,

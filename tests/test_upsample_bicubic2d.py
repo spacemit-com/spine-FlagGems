@@ -17,6 +17,7 @@ from . import accuracy_utils as utils
     ],
 )
 @pytest.mark.parametrize("dtype", [torch.float16, torch.float32, torch.bfloat16])
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="requires cuda")
 def test_upsample_bicubic2d(N, C, H, W, outH, outW, align_corners, use_scale, dtype):
     x = torch.randn((N, C, H, W), dtype=dtype, device=flag_gems.device)
 

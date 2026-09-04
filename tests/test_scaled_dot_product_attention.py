@@ -3,7 +3,6 @@ import pytest
 import torch
 
 import flag_gems
-from flag_gems.runtime import torch_device_fn
 from flag_gems.utils import random_utils
 
 from . import accuracy_utils as utils
@@ -139,7 +138,7 @@ def test_scaled_dot_product_attention_legacy(
     if flag_gems.vendor_name == "hygon":
         monkeypatch.setenv("TRITON_HIP_USE_NEW_STREAM_PIPELINE", "0")
 
-    device = torch_device_fn.current_device()
+    device = flag_gems.device
     q, k, v = make_input(
         batch,
         num_q_head,
@@ -213,7 +212,7 @@ def test_scaled_dot_product_attention_legacy_backward(
     dtype,
     enable_gqa,
 ):
-    device = torch_device_fn.current_device()
+    device = flag_gems.device
     q, k, v = make_input(
         batch,
         num_q_head,
@@ -309,7 +308,7 @@ def test_scaled_dot_product_attention_legacy_backward(
 def test_scaled_dot_product_attention_square_qk_even_mn(
     monkeypatch, batch, num_head, q_seq_len, kv_seq_len, head_size, is_causal, dtype
 ):
-    device = torch_device_fn.current_device()
+    device = flag_gems.device
 
     q, k, v = make_input(
         batch, num_head, num_head, q_seq_len, kv_seq_len, head_size, dtype, device
@@ -340,7 +339,7 @@ def test_scaled_dot_product_attention_nonsquare_qk(
     if flag_gems.vendor_name == "hygon":
         monkeypatch.setenv("TRITON_HIP_USE_NEW_STREAM_PIPELINE", "0")
 
-    device = torch_device_fn.current_device()
+    device = flag_gems.device
 
     q, k, v = make_input(
         batch, num_head, num_head, q_seq_len, kv_seq_len, head_size, dtype, device

@@ -3,7 +3,6 @@ import time
 
 import numpy as np
 import pytest
-import scipy
 import torch
 
 import flag_gems
@@ -50,6 +49,7 @@ def test_multinomial_with_replacement(shape, dtype, n_samples):
 @pytest.mark.parametrize("dtype", [torch.float16, torch.float32])
 @pytest.mark.parametrize("n_samples", [2048])
 def test_multinomial_with_replacement_1(shape, dtype, n_samples):
+    scipy = pytest.importorskip("scipy")
     # First use multinomial to generate a series of indices, then
     # use the index counts as the input probabilities (scaled)
     rand_indices = torch.multinomial(torch.rand(shape), n_samples, True).to(device)
