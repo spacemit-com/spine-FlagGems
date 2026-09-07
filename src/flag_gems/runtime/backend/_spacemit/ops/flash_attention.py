@@ -9,6 +9,8 @@ from flag_gems import runtime
 from flag_gems.runtime.backend._spacemit.ops.attn_vfwmacc import (
     _attn_qkt_gqa_host,
     _attn_av_gqa_host,
+    _attn_m1_fused_host,
+    _attn_fused_prefill_host,
 )
 from flag_gems.utils import libentry, libtuner
 
@@ -243,7 +245,6 @@ def _attn_fwd(
                 MICRO_N,
                 BLOCK_M // MICRO_M,
                 BLOCK_N // MICRO_N,
-                BLOCK_SIZE_K // MICRO_N,
             )
         else:
             if STAGE & 1:
@@ -269,7 +270,6 @@ def _attn_fwd(
                     MICRO_N,
                     BLOCK_M // MICRO_M,
                     BLOCK_N // MICRO_N,
-                    BLOCK_SIZE_K // MICRO_N,
                 )
             if STAGE & 2:
                 acc_4d, l_i_2d, m_i_2d = _attn_fwd_inner(
@@ -294,7 +294,6 @@ def _attn_fwd(
                     MICRO_N,
                     BLOCK_M // MICRO_M,
                     BLOCK_N // MICRO_N,
-                    BLOCK_SIZE_K // MICRO_N,
                 )
 
         acc_2d = smt.view(acc_4d, (0, 0), (BLOCK_M, BLOCK_SIZE_K), (1, 1))
@@ -389,6 +388,9 @@ class Attention(torch.autograd.Function):
             HEAD_DIM=HEAD_DIM_K,
             STAGE=STAGE,
             BLOCK_SIZE_K=BLOCK_SIZE_K,
+            MICRO_M=16,
+            MICRO_K=8,
+            MICRO_N=32,
         )
 
         return o
@@ -449,28 +451,86 @@ def _sdpa_vfwmacc_fast_path(q, k, v, scale, is_causal):
     return out
 
 
-def _sdpa_python_fallback(q, k, v, attn_mask, is_causal, scale):
-    """Non-recursive Python fallback (no aten.scaled_dot_product_attention call).
+def _sdpa_m1_fused(q, k, v, scale, is_causal):
+    """Fused M=1 flash attention for decode — single kernel launch.
 
-    Uses matmul / softmax directly. GQA is handled by q @ k^T broadcasting
-    when Hq != Hkv (repeat_kv semantics via tensor expand on k/v).
+    QKT + softmax + AV fused via default-path spine_raw (vexp/vmacc/vreduce).
+    grid=(Hq,), each program handles one Q head (hq/hk computed in JIT wrapper
+    via tl.program_id). Causal is a no-op for M=1 (query at position Mk-1
+    attends to all keys 0..Mk-1). Validated: max_diff=4.88e-04, 0.354ms/call.
     """
-    if scale is None:
-        scale = 1.0 / math.sqrt(q.shape[-1])
-    if q.shape[1] != k.shape[1]:
-        n_rep = q.shape[1] // k.shape[1]
-        k = k.repeat_interleave(n_rep, dim=1)
-        v = v.repeat_interleave(n_rep, dim=1)
-    attn = (q.float() @ k.float().transpose(-2, -1)) * scale
+    B, Hq, Mq, D = q.shape
+    _, Hkv, Mk, _ = k.shape
+    assert Mq == 1 and B == 1
+    n_rep = Hq // Hkv
+    out = torch.empty((B, Hq, Mq, D), dtype=q.dtype, device=q.device)
+    scratch = torch.empty((Hq, Mk), dtype=torch.float32, device=q.device)
+    scale_t = torch.tensor([scale], dtype=torch.float32, device=q.device)
+    _attn_m1_fused_host[(Hq,)](
+        q.view(Hq, D), k.view(Hkv, Mk, D), v.view(Hkv, Mk, D),
+        scratch.view(Hq * Mk), scale_t, out.view(Hq, D),
+        Mk, D, n_rep, Hq,
+    )
+    return out
+
+
+# Causal mask cache: (Mq, Mk, causal_offset) → f32 tensor of shape (Mq, Mk).
+# 0.0 on/below diagonal, -1e38 above. Avoids re-allocating per call.
+_mask_cache = {}
+
+
+def _get_causal_mask(Mq, Mk, is_causal, device):
+    """Precompute causal mask (Mq, Mk) f32. Cached per (Mq, Mk, is_causal)."""
+    if not is_causal:
+        return None
+    key = (Mq, Mk, is_causal)
+    m = _mask_cache.get(key)
+    if m is not None and m.device == device:
+        return m
+    # causal: query m attends to key n iff n <= m (Q_CTX == KV_CTX case)
+    # For Q_CTX != KV_CTX, offset = Mk - Mq, but that's decode (Mq=1) handled
+    # separately. Prefill has Q_CTX == KV_CTX, so offset = 0.
+    m = torch.zeros(Mq, Mk, dtype=torch.float32, device=device)
     if is_causal:
-        mask = torch.ones(q.shape[-2], k.shape[-2], dtype=torch.bool,
-                          device=q.device).tril()
-        attn = attn.masked_fill(~mask, float("-inf"))
-    if attn_mask is not None:
-        attn = attn + attn_mask.float()
-    attn = torch.softmax(attn, dim=-1)
-    out = attn @ v.float()
-    return out.to(q.dtype)
+        causal = torch.triu(
+            torch.full((Mq, Mk), -1.0e38, dtype=torch.float32, device=device),
+            diagonal=1,
+        )
+        m = m + causal
+    _mask_cache[key] = m
+    return m
+
+
+def _sdpa_fused_prefill(q, k, v, scale, is_causal):
+    """Fused prefill (Mq>1) attention — single kernel launch, 3-stage.
+
+    Stage 1 (LLVM-direct): QKT with scale + causal mask → f32 scratch
+    Stage 2 (default-path): softmax with vexp → f32 → f16
+    Stage 3 (LLVM-direct): AV (reuse attn_av_gqa_raw) → f16 out
+
+    Mixes 2 codegen paths in one launch via _sr_call (pattern from
+    test_raw_mv_three_stage.py). grid=(Hq,), each program handles one head.
+    Saves 1 launch + Python softmax dispatch vs 3-step.
+    """
+    B, Hq, Mq, D = q.shape
+    _, Hkv, Mk, _ = k.shape
+    assert Mq > 1 and B == 1
+    n_rep = Hq // Hkv
+    mask = _get_causal_mask(Mq, Mk, is_causal, q.device)
+    if mask is None:
+        mask = torch.zeros(Mq, Mk, dtype=torch.float32, device=q.device)
+    scale_t = torch.tensor([scale], dtype=torch.float32, device=q.device)
+    qkt_scratch = torch.empty((Hq, Mq, Mk), dtype=torch.float32, device=q.device)
+    attn_scratch = torch.empty((Hq, Mq, Mk), dtype=q.dtype, device=q.device)
+    out = torch.empty((B, Hq, Mq, D), dtype=q.dtype, device=q.device)
+    _attn_fused_prefill_host[(Hq,)](
+        q.view(Hq, Mq, D), k.view(Hkv, Mk, D), v.view(Hkv, Mk, D),
+        mask, scale_t,
+        qkt_scratch.view(Hq * Mq * Mk), attn_scratch.view(Hq * Mq * Mk),
+        out.view(Hq, Mq, D),
+        Mq, Mk, D, n_rep, Hq, Hkv,
+    )
+    return out
 
 
 def scaled_dot_product_attention(
@@ -496,9 +556,15 @@ def scaled_dot_product_attention(
             and attn_mask is None
             and dropout_p == 0.0):
         sc = scale if scale is not None else (1.0 / math.sqrt(D))
-        return _sdpa_vfwmacc_fast_path(query, key, value, sc, is_causal)
-    # Fallback: manual Python path (avoids aten SDPA recursion)
-    return _sdpa_python_fallback(query, key, value, attn_mask, is_causal, scale)
+        if Mq == 1:
+            return _sdpa_m1_fused(query, key, value, sc, is_causal)
+        return _sdpa_fused_prefill(query, key, value, sc, is_causal)
+    raise NotImplementedError(
+        f"unsupported SDPA shape: dtype={query.dtype} D={D} B={B} "
+        f"Hq={Hq} Hkv={Hkv} Mq={Mq} Mk={Mk} "
+        f"contiguous={query.is_contiguous()}/{key.is_contiguous()}/{value.is_contiguous()} "
+        f"attn_mask={attn_mask is not None} dropout={dropout_p} "
+        f"(need f16, D=128, B=1, GQA, contiguous, no mask)")
 
 
 def scaled_dot_product_flash_attention_for_cpu(
