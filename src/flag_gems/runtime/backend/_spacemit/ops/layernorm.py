@@ -46,12 +46,14 @@ def layer_norm_common_kernel(
         order=[0],
     )
     for off_n in range(0, num_pid_n):
+        # accumulate mean/var in f32: tl.sum on a raw fp16 tile stays fp16
+        # and blows the 1e-3 fp16 tolerance for large N
         a = tl.load(
             x_ptr_desc,
             boundary_check=[0],
-        )
+        ).to(tl.float32)
         mean += tl.sum(a)
-        var += tl.sum(pow(a, (2).to(X.type.element_ty)))
+        var += tl.sum(a * a)
 
         x_ptr_desc = tl.advance(x_ptr_desc, [TILE_N])
 
@@ -71,23 +73,27 @@ def layer_norm_common_kernel(
         order=[0],
     )
 
-    weight_ptr_desc = tl.make_block_ptr(
-        base=W,
-        shape=[N],
-        strides=[1],
-        offsets=[0],
-        block_shape=[TILE_N],
-        order=[0],
-    )
+    # W/B can be None (wb_none tests); make_block_ptr rejects a None base, so
+    # build these descriptors only on the branch that actually loads them.
+    if W is not None:
+        weight_ptr_desc = tl.make_block_ptr(
+            base=W,
+            shape=[N],
+            strides=[1],
+            offsets=[0],
+            block_shape=[TILE_N],
+            order=[0],
+        )
 
-    bias_ptr_desc = tl.make_block_ptr(
-        base=B,
-        shape=[N],
-        strides=[1],
-        offsets=[0],
-        block_shape=[TILE_N],
-        order=[0],
-    )
+    if B is not None:
+        bias_ptr_desc = tl.make_block_ptr(
+            base=B,
+            shape=[N],
+            strides=[1],
+            offsets=[0],
+            block_shape=[TILE_N],
+            order=[0],
+        )
     y_ptr_desc = tl.make_block_ptr(
         base=Y,
         shape=[N],
@@ -127,7 +133,9 @@ def layer_norm_common_kernel(
         y = x_hat * w + b
         tl.store(
             y_ptr_desc,
-            y,
+            # block-ptr store checks element types strictly (no implicit
+            # downcast), so cast the f32 math result back to Y's dtype
+            y.to(Y.type.element_ty),
             boundary_check=[0],
         )
         y_ptr_desc = tl.advance(y_ptr_desc, [TILE_N])

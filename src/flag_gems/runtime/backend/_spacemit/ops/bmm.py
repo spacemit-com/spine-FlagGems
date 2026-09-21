@@ -37,13 +37,14 @@ def bmm_kernel(
     stride_cn,
     TILE_M: tl.constexpr,
     TILE_N: tl.constexpr,
-    EVEN_K: tl.constexpr,
     TILE_K: tl.constexpr,
     MICRO_M: tl.constexpr,
     MICRO_K: tl.constexpr,
     MICRO_N: tl.constexpr,
     SUB_BLK_K: tl.constexpr,
 ):
+    even_k = SUB_BLK_K >= TILE_K
+
     pidx = tl.program_id(0)
     pidy = tl.program_id(1)
     pid_b = tl.program_id(2)
@@ -85,7 +86,7 @@ def bmm_kernel(
         order=(1, 0),
     )
 
-    if EVEN_K:
+    if even_k:
         a_descriptor_load = smt.descriptor_load(a_ptr, (0, 0))
         a = smt.view(a_descriptor_load, (0, 0), (TILE_M, TILE_K), (MICRO_M, MICRO_K))
         b_descriptor_load = smt.descriptor_load(b_ptr, (0, 0))
@@ -94,19 +95,19 @@ def bmm_kernel(
     else:
         acc = tl.zeros((TILE_M, TILE_N), dtype=A.type.element_ty)
         acc = smt.view(acc, (0, 0), (TILE_M, TILE_N), (MICRO_M, MICRO_N))
-        sub_num = (K + SUB_BLK_K - 1) // SUB_BLK_K
+        sub_num = TILE_K // SUB_BLK_K
         for k in tl.range(0, sub_num):
-            a_descriptor_load = smt.descriptor_load(a_ptr, (0, 0))
+            a_descriptor_load = smt.descriptor_load(a_ptr, (0, k * SUB_BLK_K))
             a = smt.view(
                 a_descriptor_load,
-                (0, k * SUB_BLK_K),
+                (0, 0),
                 (TILE_M, SUB_BLK_K),
                 (MICRO_M, MICRO_K),
             )
-            b_descriptor_load = smt.descriptor_load(b_ptr, (0, 0))
+            b_descriptor_load = smt.descriptor_load(b_ptr, (k * SUB_BLK_K, 0))
             b = smt.view(
                 b_descriptor_load,
-                (k * SUB_BLK_K, 0),
+                (0, 0),
                 (SUB_BLK_K, TILE_N),
                 (MICRO_K, MICRO_N),
             )
@@ -116,6 +117,26 @@ def bmm_kernel(
     c = acc.to(o_ptr.dtype.element_ty)
 
     tl.store(o_ptr, c, boundary_check=(0, 1))
+
+
+K3_TCM_BYTES = 384 * 1024
+TILE_M_ = 128
+TILE_N_ = 256
+
+
+def _max_tile_k(dtype):
+    """Largest TILE_K whose staged A/B tiles still fit the per-core TCM.
+
+    The kernel stages TILE_M*TILE_K of A and TILE_K*TILE_N of B, plus a
+    TILE_M*TILE_N f32 accumulator, in one tcm_malloc call:
+        bytes = (TILE_M + TILE_N) * TILE_K * element_size + TILE_M * TILE_N * 4
+    tcm_malloc has no failure path in the generated kernel, so exceeding the
+    pool segfaults instead of degrading.
+    """
+    element_size = dtype.itemsize
+    budget = K3_TCM_BYTES - TILE_M_ * TILE_N_ * 4
+    max_k = budget // ((TILE_M_ + TILE_N_) * element_size)
+    return max(128, min(1024, 1 << (max_k.bit_length() - 1)))
 
 
 def bmm(A, B):
@@ -145,7 +166,11 @@ def bmm(A, B):
         )
 
     TILE_K = triton.next_power_of_2(K)
-    SUB_BLK_K = min(1024, TILE_K)
+    MAX_TILE_K = _max_tile_k(A.dtype)
+    # A single descriptor_load stages the whole TILE_K, so a large K overflows
+    # the 384KB per-core TCM and tcm_malloc returns NULL. Fall back to the
+    # SUB_BLK_K loop, which stages one K sub-block at a time.
+    SUB_BLK_K = min(TILE_K, MAX_TILE_K)
 
     bmm_kernel[grid_fn](
         A,
@@ -195,7 +220,8 @@ def bmm_out(A, B, out):
         )
 
     TILE_K = triton.next_power_of_2(K)
-    SUB_BLK_K = min(1024, TILE_K)
+    MAX_TILE_K = _max_tile_k(A.dtype)
+    SUB_BLK_K = min(TILE_K, MAX_TILE_K)
 
     bmm_kernel[grid_fn](
         A,

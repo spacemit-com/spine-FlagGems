@@ -1,30 +1,16 @@
 attention:
-  - gen: true
-    param_map:
-      META:
-        BLOCK_M: block_m
-        BLOCK_N: block_n
-        PRE_LOAD_V: pre_load_v
-      num_warps: warps
-      num_stages: stages
-    block_m:
-      - 32
-      - 64
-      - 128
-    block_n:
-      - 32
-      - 64
-      - 128
-    pre_load_v:
-      - true
-      - false
-    warps:
-      - 4
-      - 8
-    stages:
-      - 2
-      - 3
-      - 4
+  # Single pinned config for the K3/QEMU backend: the generated 3x3x2x2x3
+  # enumeration plus the code-appended SMALL_HEAD_DIM_CONFIGS (BLOCK_N=16)
+  # makes every attention autotune benchmark ~36 configs on QEMU, and the
+  # (128,32,warps=4) tile is the only combination validated to compile and
+  # run correctly here (BLOCK_N=16 dots with head_dim=16 trip the
+  # spestruct.inner_pack verifier in spine-opt).
+  - META:
+      BLOCK_M: 128
+      BLOCK_N: 32
+      PRE_LOAD_V: false
+    num_warps: 4
+    num_stages: 2
 attention_bwd:
   - gen: true
     param_map:
@@ -46,7 +32,6 @@ bmm_spacemit:
 - META:
     TILE_M: 128
     TILE_N: 256
-    EVEN_K: 1
     MICRO_M: 8
     MICRO_N: 32
     MICRO_K: 32
@@ -177,8 +162,8 @@ addmm_spacemit:
     MICRO_K: 32
 addmm:
   - META:
-      BLOCK_SIZE_M: 128
-      BLOCK_SIZE_N: 256
+      BLOCK_SIZE_M: 64
+      BLOCK_SIZE_N: 128
       BLOCK_SIZE_K: 64
     num_stages: 3
     num_warps: 8

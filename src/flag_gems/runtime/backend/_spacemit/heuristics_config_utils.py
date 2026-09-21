@@ -1,3 +1,4 @@
+import torch
 import triton
 
 
@@ -134,6 +135,21 @@ def softmax_heur_tile_n_non_inner(args):
 
 
 def softmax_heur_one_tile_per_cta(args):
+    # The one-tile fast path of the forward softmax kernels feeds the raw
+    # half-dtype tensor straight into tl.exp, which the Triton frontend
+    # rejects by design (math ops accept fp32/fp64 only, same on NVIDIA).
+    # The multi-tile path keeps m/z in fp32 accumulators, so route fp16/bf16
+    # inputs there; other dtypes keep the tile-size decision.
+    for value in args.values():
+        dtype = getattr(value, "dtype", None)
+        if dtype is not None:
+            if dtype in (torch.float16, torch.bfloat16):
+                return False
+            break
+    return args["TILE_N"] >= args["N"]
+
+
+def softmax_bwd_heur_one_tile_per_cta(args):
     return args["TILE_N"] >= args["N"]
 
 
@@ -273,11 +289,11 @@ HEURISTICS_CONFIGS = {
     },
     "softmax_backward_non_inner": {
         "TILE_N": softmax_heur_tile_n_bwd_non_inner,
-        "ONE_TILE_PER_CTA": softmax_heur_one_tile_per_cta,
+        "ONE_TILE_PER_CTA": softmax_bwd_heur_one_tile_per_cta,
     },
     "softmax_backward_inner": {
         "TILE_M": softmax_heru_tile_m,
-        "ONE_TILE_PER_CTA": softmax_heur_one_tile_per_cta,
+        "ONE_TILE_PER_CTA": softmax_bwd_heur_one_tile_per_cta,
     },
     "uniform": {
         "BLOCK": uniform_heur_block,

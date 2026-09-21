@@ -533,6 +533,34 @@ def _sdpa_fused_prefill(q, k, v, scale, is_causal):
     return out
 
 
+def _sdpa_python_fallback(query, key, value, attn_mask, dropout_p, is_causal, scale):
+    """Manual QK^T + softmax + AV for shapes/dtypes the fused kernels reject.
+
+    Must not call aten scaled_dot_product_attention (recursion once this op is
+    registered as an aten override). Computes in fp32 because the backend has
+    no bf16 dot and cannot pack head_dim=16 dots.
+    """
+    assert dropout_p == 0.0, "fallback only supports dropout_p=0.0"
+    B, Hq, Mq, D = query.shape
+    _, Hkv, Mk, _ = key.shape
+    if Hq != Hkv:
+        n_rep = Hq // Hkv
+        key = key.unsqueeze(2).expand(B, Hkv, n_rep, Mk, D).reshape(B, Hq, Mk, D)
+        value = value.unsqueeze(2).expand(B, Hkv, n_rep, Mk, D).reshape(
+            B, Hq, Mk, D
+        )
+    attn = query.float() @ key.float().transpose(-1, -2) * scale
+    if is_causal:
+        q_idx = torch.arange(Mq, device=query.device).unsqueeze(-1)
+        k_idx = torch.arange(Mk, device=query.device).unsqueeze(0)
+        attn = attn.masked_fill(k_idx - q_idx > Mk - Mq, float("-inf"))
+    if attn_mask is not None:
+        attn = attn + attn_mask
+    attn = torch.nn.functional.softmax(attn, dim=-1)
+    out = attn @ value.float()
+    return out.to(query.dtype)
+
+
 def scaled_dot_product_attention(
     query,
     key,
@@ -559,12 +587,10 @@ def scaled_dot_product_attention(
         if Mq == 1:
             return _sdpa_m1_fused(query, key, value, sc, is_causal)
         return _sdpa_fused_prefill(query, key, value, sc, is_causal)
-    raise NotImplementedError(
-        f"unsupported SDPA shape: dtype={query.dtype} D={D} B={B} "
-        f"Hq={Hq} Hkv={Hkv} Mq={Mq} Mk={Mk} "
-        f"contiguous={query.is_contiguous()}/{key.is_contiguous()}/{value.is_contiguous()} "
-        f"attn_mask={attn_mask is not None} dropout={dropout_p} "
-        f"(need f16, D=128, B=1, GQA, contiguous, no mask)")
+    sc = scale if scale is not None else (1.0 / math.sqrt(D))
+    return _sdpa_python_fallback(
+        query, key, value, attn_mask, dropout_p, is_causal, sc
+    )
 
 
 def scaled_dot_product_flash_attention_for_cpu(
