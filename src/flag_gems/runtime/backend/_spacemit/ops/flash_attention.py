@@ -7,12 +7,7 @@ import triton.language as tl
 import triton.language.extra.smt as smt
 
 from flag_gems import runtime
-from flag_gems.runtime.backend._spacemit.ops.attn_vfwmacc import (
-    _attn_qkt_gqa_host,
-    _attn_av_gqa_host,
-    _attn_m1_fused_host,
-    _attn_fused_prefill_host,
-)
+from flag_gems.runtime.backend._spacemit.ops.attn_vfwmacc import _attn_m1_fused_host
 from flag_gems.utils import libentry, libtuner
 
 
@@ -428,48 +423,6 @@ def flash_attention(
     return Attention.apply(query, key, value, scale, is_causal, enable_gqa)
 
 
-def _sdpa_vfwmacc_fast_path(q, k, v, scale, is_causal):
-    """vfwmacc GQA fast path for K3 (D=128, f16, B=1, GQA).
-
-    Mirrors the validated monkey-patch in bench_qwen_sdpa_override.py:
-    QKT kernel (per-head grid) + Python softmax + AV kernel (per-head grid).
-    GQA handled inside kernels via hk = hq // Nrep (skips repeat_kv).
-    """
-    B, Hq, Mq, D = q.shape
-    _, Hkv, Mk, _ = k.shape
-    n_rep = Hq // Hkv
-
-    qkt = torch.empty(B, Hq, Mq, Mk, dtype=q.dtype)
-    _attn_qkt_gqa_host[(Hq,)](
-        q.view(Hq, Mq, D), k.view(Hkv, Mk, D), qkt.view(Hq, Mq, Mk),
-        Mq, Mk, D, Hq, Hkv, n_rep,
-    )
-
-    if is_causal and Mq > 1:
-        attn_weights = qkt * scale
-        causal = torch.triu(
-            torch.full((Mq, Mk), float("-inf"), dtype=torch.float32,
-                       device=qkt.device),
-            diagonal=1,
-        )
-        attn_weights = attn_weights + causal
-        attn_weights = torch.nn.functional.softmax(
-            attn_weights, dim=-1, dtype=torch.float32
-        ).to(q.dtype)
-    else:
-        scale_h = qkt.new_tensor(scale)
-        attn_weights = torch.nn.functional.softmax(
-            qkt * scale_h, dim=-1, dtype=q.dtype
-        )
-
-    out = torch.empty(B, Hq, Mq, D, dtype=q.dtype)
-    _attn_av_gqa_host[(Hq,)](
-        attn_weights.view(Hq, Mq, Mk), v.view(Hkv, Mk, D), out.view(Hq, Mq, D),
-        Mq, Mk, D, Hq, Hkv, n_rep,
-    )
-    return out
-
-
 def _sdpa_m1_fused(q, k, v, scale, is_causal):
     """Fused M=1 flash attention for decode — single kernel launch.
 
@@ -489,65 +442,6 @@ def _sdpa_m1_fused(q, k, v, scale, is_causal):
         q.view(Hq, D), k.view(Hkv, Mk, D), v.view(Hkv, Mk, D),
         scratch.view(Hq * Mk), scale_t, out.view(Hq, D),
         Mk, D, n_rep, Hq,
-    )
-    return out
-
-
-# Causal mask cache: (Mq, Mk, causal_offset) → f32 tensor of shape (Mq, Mk).
-# 0.0 on/below diagonal, -1e38 above. Avoids re-allocating per call.
-_mask_cache = {}
-
-
-def _get_causal_mask(Mq, Mk, is_causal, device):
-    """Precompute causal mask (Mq, Mk) f32. Cached per (Mq, Mk, is_causal)."""
-    if not is_causal:
-        return None
-    key = (Mq, Mk, is_causal)
-    m = _mask_cache.get(key)
-    if m is not None and m.device == device:
-        return m
-    # causal: query m attends to key n iff n <= m (Q_CTX == KV_CTX case)
-    # For Q_CTX != KV_CTX, offset = Mk - Mq, but that's decode (Mq=1) handled
-    # separately. Prefill has Q_CTX == KV_CTX, so offset = 0.
-    m = torch.zeros(Mq, Mk, dtype=torch.float32, device=device)
-    if is_causal:
-        causal = torch.triu(
-            torch.full((Mq, Mk), -1.0e38, dtype=torch.float32, device=device),
-            diagonal=1,
-        )
-        m = m + causal
-    _mask_cache[key] = m
-    return m
-
-
-def _sdpa_fused_prefill(q, k, v, scale, is_causal):
-    """Fused prefill (Mq>1) attention — single kernel launch, 3-stage.
-
-    Stage 1 (LLVM-direct): QKT with scale + causal mask → f32 scratch
-    Stage 2 (default-path): softmax with vexp → f32 → f16
-    Stage 3 (LLVM-direct): AV (reuse attn_av_gqa_raw) → f16 out
-
-    Mixes 2 codegen paths in one launch via _sr_call (pattern from
-    test_raw_mv_three_stage.py). grid=(Nrep, Hkv), each program handles one head.
-    Saves 1 launch + Python softmax dispatch vs 3-step.
-    """
-    B, Hq, Mq, D = q.shape
-    _, Hkv, Mk, _ = k.shape
-    assert Mq > 1 and B == 1
-    n_rep = Hq // Hkv
-    mask = _get_causal_mask(Mq, Mk, is_causal, q.device)
-    if mask is None:
-        mask = torch.zeros(Mq, Mk, dtype=torch.float32, device=q.device)
-    scale_t = torch.tensor([scale], dtype=torch.float32, device=q.device)
-    qkt_scratch = torch.empty((Hq, Mq, Mk), dtype=torch.float32, device=q.device)
-    attn_scratch = torch.empty((Hq, Mq, Mk), dtype=q.dtype, device=q.device)
-    out = torch.empty((B, Hq, Mq, D), dtype=q.dtype, device=q.device)
-    _attn_fused_prefill_host[(n_rep, Hkv)](
-        q.view(Hq, Mq, D), k.view(Hkv, Mk, D), v.view(Hkv, Mk, D),
-        mask, scale_t,
-        qkt_scratch.view(Hq * Mq * Mk), attn_scratch.view(Hq * Mq * Mk),
-        out.view(Hq, Mq, D),
-        Mq, Mk, D, n_rep, Hq, Hkv,
     )
     return out
 
