@@ -3,11 +3,9 @@ import triton
 import triton.language as tl
 import triton.language.extra.smt as smt
 
-from flag_gems import runtime
-from flag_gems.utils import libentry, libtuner
-import triton.language.extra.spine_raw as tle
-from triton.language.extra.spine_raw import call as _sr_call
-from triton.language.extra.spine_raw import mem, index
+import triton.language.extra.smt_rvisa as tle
+from triton.language.extra.smt_rvisa import call as _sr_call
+from triton.language.extra.smt_rvisa import mem, index
 
 _f16 = tle.f16
 _f32 = tle.f32
@@ -376,8 +374,6 @@ def _mm_smt_path(a, b, c, M, K, N):
     Returns True on success, False to fall back. Handles arbitrary N via
     chunked launches (each ≤131072 cols, BN=256) + per-chunk main/tail split."""
     bn = _pick_smt_bn(N)
-    if bn == 0:
-        return False
     if N > _SMT_MAX_COLS_PER_LAUNCH:
         # Chunked smt.dot would be slower than vfwmacc.vv NB=512 — let caller fall back.
         return False
@@ -450,209 +446,6 @@ def _mm_tldot_path(a, b, c, M, K, N):
     return True
 
 
-@libentry()
-@libtuner(
-    configs=runtime.get_tuned_config("mm_spacemit"),
-    key=["M", "N", "K"],
-)
-@triton.jit
-def mm_kernel(
-    a_ptr,
-    b_ptr,
-    c_ptr,
-    M,
-    N,
-    K,
-    stride_am,
-    stride_ak,
-    stride_bk,
-    stride_bn,
-    stride_cm,
-    stride_cn,
-    BLOCK_SIZE_M: tl.constexpr,
-    BLOCK_SIZE_N: tl.constexpr,
-    BLOCK_SIZE_K: tl.constexpr,
-    EVEN_K: tl.constexpr,
-    SPLIT_M: tl.constexpr,
-    SPLIT_N: tl.constexpr,
-    SPLIT_K: tl.constexpr,
-    SUB_BLK_M: tl.constexpr,
-    SUB_BLK_N: tl.constexpr,
-    MICRO_M: tl.constexpr,
-    MICRO_K: tl.constexpr,
-    MICRO_N: tl.constexpr,
-    SUB_BLK_K: tl.constexpr,
-):
-    pid_m = tl.program_id(0)
-    pid_n = tl.program_id(1)
-    a_block_ptr = tl.make_block_ptr(
-        base=a_ptr,
-        shape=[M, K],
-        strides=[stride_am, stride_ak],
-        offsets=[pid_m * BLOCK_SIZE_M, 0],
-        block_shape=[BLOCK_SIZE_M, BLOCK_SIZE_K],
-        order=[1, 0],
-    )
-
-    b_block_ptr = tl.make_block_ptr(
-        base=b_ptr,
-        shape=[K, N],
-        strides=[stride_bk, stride_bn],
-        offsets=[0, pid_n * BLOCK_SIZE_N],
-        block_shape=[BLOCK_SIZE_K, BLOCK_SIZE_N],
-        order=[1, 0],
-    )
-
-    if EVEN_K:
-        a_descriptor_load = smt.descriptor_load(a_block_ptr, (0, 0))
-        a = smt.view(
-            a_descriptor_load, (0, 0), (BLOCK_SIZE_M, BLOCK_SIZE_K), (MICRO_M, MICRO_K)
-        )
-        b_descriptor_load = smt.descriptor_load(b_block_ptr, (0, 0))
-        b = smt.view(
-            b_descriptor_load, (0, 0), (BLOCK_SIZE_K, BLOCK_SIZE_N), (MICRO_K, MICRO_N)
-        )
-        accumulator = smt.dot(a, b)
-        accumulator = smt.view(
-            accumulator, (0, 0), (BLOCK_SIZE_M, BLOCK_SIZE_N), (1, 1)
-        )
-        c = accumulator.to(c_ptr.dtype.element_ty)
-        c_block_ptr = tl.make_block_ptr(
-            base=c_ptr,
-            shape=[M, N],
-            strides=[stride_cm, stride_cn],
-            offsets=[pid_m * BLOCK_SIZE_M, pid_n * BLOCK_SIZE_N],
-            block_shape=[BLOCK_SIZE_M, BLOCK_SIZE_N],
-            order=[1, 0],
-        )
-        tl.store(c_block_ptr, c, boundary_check=(0, 1))
-
-    elif SPLIT_M:
-        b_descriptor_load = smt.descriptor_load(b_block_ptr, (0, 0))
-        b = smt.view(
-            b_descriptor_load, (0, 0), (BLOCK_SIZE_K, BLOCK_SIZE_N), (MICRO_K, MICRO_N)
-        )
-        sub_num = (
-            min(BLOCK_SIZE_M, M - BLOCK_SIZE_M * pid_m) + SUB_BLK_M - 1
-        ) // SUB_BLK_M
-        for s in smt.parallel(0, sub_num):
-            a_descriptor_load = smt.descriptor_load(a_block_ptr, (0, 0))
-            a = smt.view(
-                a_descriptor_load,
-                (s * SUB_BLK_M, 0),
-                (SUB_BLK_M, BLOCK_SIZE_K),
-                (MICRO_M, MICRO_K),
-            )
-            accumulator = smt.dot(a, b)
-            accumulator = smt.view(
-                accumulator, (0, 0), (SUB_BLK_M, BLOCK_SIZE_N), (1, 1)
-            )
-            c = accumulator.to(c_ptr.dtype.element_ty)
-            c_block_ptr = tl.make_block_ptr(
-                base=c_ptr,
-                shape=[M, N],
-                strides=[stride_cm, stride_cn],
-                offsets=[pid_m * BLOCK_SIZE_M + s * SUB_BLK_M, pid_n * BLOCK_SIZE_N],
-                block_shape=[SUB_BLK_M, BLOCK_SIZE_N],
-                order=[1, 0],
-            )
-            tl.store(c_block_ptr, c, boundary_check=(0, 1))
-
-    elif SPLIT_N:
-        sub_num_m = (
-            min(BLOCK_SIZE_M, M - BLOCK_SIZE_M * pid_m) + SUB_BLK_M - 1
-        ) // SUB_BLK_M
-        sub_num_n = (
-            min(BLOCK_SIZE_N, N - BLOCK_SIZE_N * pid_n) + SUB_BLK_N - 1
-        ) // SUB_BLK_N
-        total_sub_blocks = sub_num_m * sub_num_n
-        b_alloc_ptr = smt.alloc(shape=[BLOCK_SIZE_K, BLOCK_SIZE_N])
-        b_alloc_view_ptr = smt.view(
-            b_alloc_ptr, (0, 0), (BLOCK_SIZE_K, BLOCK_SIZE_N), (MICRO_K, MICRO_N)
-        )
-        bar = smt.mbarrier(flag=0, expect_count=sub_num_n)
-        for s in smt.parallel(0, total_sub_blocks):
-            s_m = s // sub_num_n
-            s_n = s % sub_num_n
-            a_descriptor_load = smt.descriptor_load(a_block_ptr, (0, 0))
-            a = smt.view(
-                a_descriptor_load,
-                (s_m * SUB_BLK_M, 0),
-                (SUB_BLK_M, BLOCK_SIZE_K),
-                (MICRO_M, MICRO_K),
-            )
-            b_alloc_sub_ptr = smt.view(
-                b_alloc_view_ptr, (0, s_n * SUB_BLK_N), (BLOCK_SIZE_K, SUB_BLK_N)
-            )
-            if s_m == 0:
-                b_descriptor_load = smt.descriptor_load(b_block_ptr, (0, 0))
-                b = smt.view(
-                    b_descriptor_load,
-                    (0, s_n * SUB_BLK_N),
-                    (BLOCK_SIZE_K, SUB_BLK_N),
-                    (MICRO_K, MICRO_N),
-                )
-                tl.store(b_alloc_sub_ptr, b, boundary_check=(0, 1, 2, 3))
-                smt.barrier_arrive(bar)
-            else:
-                smt.barrier_wait(bar, flag=1)
-
-            b_alloc = tl.load(b_alloc_sub_ptr, boundary_check=(0, 1, 2, 3))
-            accumulator = smt.dot(a, b_alloc)
-            accumulator = smt.view(accumulator, (0, 0), (SUB_BLK_M, SUB_BLK_N), (1, 1))
-            c = accumulator.to(c_ptr.dtype.element_ty)
-            c_block_ptr = tl.make_block_ptr(
-                base=c_ptr,
-                shape=[M, N],
-                strides=[stride_cm, stride_cn],
-                offsets=[
-                    pid_m * BLOCK_SIZE_M + s_m * SUB_BLK_M,
-                    pid_n * BLOCK_SIZE_N + s_n * SUB_BLK_N,
-                ],
-                block_shape=[SUB_BLK_M, SUB_BLK_N],
-                order=[1, 0],
-            )
-            tl.store(c_block_ptr, c, boundary_check=(0, 1))
-
-    elif SPLIT_K:
-        accumulator = tl.zeros(
-            (BLOCK_SIZE_M, BLOCK_SIZE_N), dtype=a_ptr.type.element_ty
-        )
-        accumulator = smt.view(
-            accumulator, (0, 0), (BLOCK_SIZE_M, BLOCK_SIZE_N), (MICRO_M, MICRO_N)
-        )
-        sub_num = (K + SUB_BLK_K - 1) // SUB_BLK_K
-        for k in tl.range(0, sub_num):
-            a_descriptor_load = smt.descriptor_load(a_block_ptr, (0, 0))
-            a = smt.view(
-                a_descriptor_load,
-                (0, k * SUB_BLK_K),
-                (BLOCK_SIZE_M, SUB_BLK_K),
-                (MICRO_M, MICRO_K),
-            )
-            b_descriptor_load = smt.descriptor_load(b_block_ptr, (0, 0))
-            b = smt.view(
-                b_descriptor_load,
-                (k * SUB_BLK_K, 0),
-                (SUB_BLK_K, BLOCK_SIZE_N),
-                (MICRO_K, MICRO_N),
-            )
-            accumulator += smt.dot(a, b)
-        accumulator = smt.view(
-            accumulator, (0, 0), (BLOCK_SIZE_M, BLOCK_SIZE_N), (1, 1)
-        )
-        c = accumulator.to(c_ptr.dtype.element_ty)
-
-        c_block_ptr = tl.make_block_ptr(
-            base=c_ptr,
-            shape=[M, N],
-            strides=[stride_cm, stride_cn],
-            offsets=[pid_m * BLOCK_SIZE_M, pid_n * BLOCK_SIZE_N],
-            block_shape=[BLOCK_SIZE_M, BLOCK_SIZE_N],
-            order=[1, 0],
-        )
-        tl.store(c_block_ptr, c, boundary_check=(0, 1))
-
 
 def _mm_transposed_tail(a, b, c, M, K, N):
     """vfwmacc fast path for transposed b (b.stride(0)==1, b=W.T).
@@ -688,17 +481,12 @@ def _mm_transposed_tail(a, b, c, M, K, N):
         # c[m, n_main+ni]. CS=N (full row stride) keeps c layout correct.
         b_tail = b[:, n_main:]
         c_tail = c[:, n_main:]
-        if n_tail % 8 == 0:
-            if M == 1:
-                _mm_m1_t_host[(1,)](a, b_tail, c_tail, K, n_tail, NB=n_tail)
-            else:
-                _mm_mN_t_host[(1,)](a, b_tail, c_tail, M, K, n_tail, NB=n_tail, CS=N)
+        # n_tail is always 8-aligned: callers gate N%8==0 and NB is
+        # 256/512, so n_main and n_tail are both multiples of 8.
+        if M == 1:
+            _mm_m1_t_host[(1,)](a, b_tail, c_tail, K, n_tail, NB=n_tail)
         else:
-            # n_tail not multiple of 8: fall back to native addmm (rare).
-            # zeros, not empty: FlagGems addmm loads self unconditionally
-            tmp = torch.zeros(M, n_tail, dtype=a.dtype, device=a.device)
-            torch.addmm(tmp, a, b_tail, beta=0, alpha=1, out=tmp)
-            c[:, n_main:].copy_(tmp)
+            _mm_mN_t_host[(1,)](a, b_tail, c_tail, M, K, n_tail, NB=n_tail, CS=N)
     return True
 
 
@@ -731,13 +519,20 @@ def mm(a, b):
         else:
             # M>1 prefill: try smt.dot (matrix engine, 4x faster) first,
             # fall back to tl.dot, then vfwmacc. Only for proj mms (N<=4096).
-            if b.stride(0) == 1 and N % 8 == 0:
+            # Contiguous b rides the same engine paths: both _mm_smt_path and
+            # _mm_tldot_path feed the kernel b_contig (K,N) row-major, and
+            # _get_b_contig is a no-op when b is already contiguous. The
+            # vfwmacc tail (_mm_transposed_tail) requires W-layout
+            # (b.stride(0)==1), so contiguous b that exhausts smt/tl.dot
+            # falls to ATen below instead.
+            if (b.stride(0) == 1 or b.is_contiguous()) and N % 8 == 0:
                 if _mm_smt_path(a, b, c, M, K, N):
                     return c
                 if _mm_tldot_path(a, b, c, M, K, N):
                     return c
-                _mm_transposed_tail(a, b, c, M, K, N)
-                return c
+                if b.stride(0) == 1:
+                    _mm_transposed_tail(a, b, c, M, K, N)
+                    return c
     # Fallback: ATen native mm. torch.addmm beta=0 bypasses aten::mm dispatch
     # (see _arm/ops/mm.py:540). Cannot call torch.mm() (infinite recursion via
     # torch.library override). Handles non-f16, non-contiguous, non-tile-aligned.
@@ -766,13 +561,17 @@ def mm_out(a, b, *, out):
                 _mm_transposed_tail(a, b, out, M, K, N)
                 return out
         else:
-            if b.stride(0) == 1 and N % 8 == 0:
+            # Contiguous b rides the same engine paths (kernel always sees
+            # b_contig row-major); the vfwmacc tail needs W-layout, so fall
+            # to ATen below when smt/tl.dot both decline.
+            if (b.stride(0) == 1 or b.is_contiguous()) and N % 8 == 0:
                 if _mm_smt_path(a, b, out, M, K, N):
                     return out
                 if _mm_tldot_path(a, b, out, M, K, N):
                     return out
-                _mm_transposed_tail(a, b, out, M, K, N)
-                return out
+                if b.stride(0) == 1:
+                    _mm_transposed_tail(a, b, out, M, K, N)
+                    return out
 
     # zero first (same uninit-self NaN hazard as mm() fallback above); out may
     # be a non-contiguous caller tensor — the overridden `zero` op flat-fills

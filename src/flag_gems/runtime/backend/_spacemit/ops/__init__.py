@@ -1,4 +1,4 @@
-# from .addmm import addmm
+from .addmm import addmm
 from .argmax import argmax
 from .argmin import argmin
 from .bmm import bmm, bmm_out
@@ -32,7 +32,7 @@ from .softmax import softmax
 from .where import where_scalar_other, where_scalar_self, where_self, where_self_out
 
 __all__ = [
-    # "addmm",
+    "addmm",
     "argmax",
     "argmin",
     "bmm",
