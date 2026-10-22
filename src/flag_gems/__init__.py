@@ -472,7 +472,7 @@ _FULL_CONFIG = (
     ("rsub.Scalar", rsub_scalar),
     ("rsub.Tensor", rsub_tensor),
     ("scaled_dot_product_attention", scaled_dot_product_attention),
-    ("_scaled_dot_product_flash_attention_for_cpu", scaled_dot_product_flash_attention_for_cpu),
+    # ("_scaled_dot_product_flash_attention_for_cpu", scaled_dot_product_flash_attention_for_cpu),
     ("scaled_softmax_backward", scaled_softmax_backward),
     ("scaled_softmax_forward", scaled_softmax_forward),
     ("scatter.reduce", scatter),

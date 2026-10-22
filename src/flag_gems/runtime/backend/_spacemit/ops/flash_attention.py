@@ -1,4 +1,5 @@
 import math
+import os
 
 import torch
 import triton
@@ -111,9 +112,27 @@ def _attn_fwd_inner(
     return acc, l_i_2d, m_i_2d
 
 
+def _spacemit_attention_configs():
+    # Tuned configs for "attention" are shared across CPU backends and may
+    # carry options this kernel does not take (PRE_LOAD_V) plus a num_ctas
+    # tuned for another flavor; strip the former and pin num_ctas to the
+    # launcher default (grid size = number of persistent programs).
+    cfgs = runtime.get_tuned_config("attention")
+    # BLOCK_M sets the smt scratch arena size; the TCM pool is 256KB per
+    # worker and the tuned BLOCK_M=128 requests ~485KB, which tcm_malloc
+    # fails with NULL (the kernel then segfaults on its first scratch init
+    # store). Clamp to a size that fits the pool.
+    block_m = int(os.environ.get("ATTN_FLASH_BLOCK_M", "32"))
+    for c in cfgs:
+        c.kwargs.pop("PRE_LOAD_V", None)
+        c.num_ctas = 16
+        c.kwargs["BLOCK_M"] = block_m
+    return cfgs
+
+
 @libentry()
 @libtuner(
-    configs=runtime.get_tuned_config("attention"),
+    configs=_spacemit_attention_configs(),
     key=["Q_CTX", "KV_CTX", "HEAD_DIM", "GROUP_SIZE"],
 )
 @triton.jit
@@ -509,7 +528,7 @@ def _sdpa_fused_prefill(q, k, v, scale, is_causal):
     Stage 3 (LLVM-direct): AV (reuse attn_av_gqa_raw) → f16 out
 
     Mixes 2 codegen paths in one launch via _sr_call (pattern from
-    test_raw_mv_three_stage.py). grid=(Hq,), each program handles one head.
+    test_raw_mv_three_stage.py). grid=(Nrep, Hkv), each program handles one head.
     Saves 1 launch + Python softmax dispatch vs 3-step.
     """
     B, Hq, Mq, D = q.shape
@@ -523,7 +542,7 @@ def _sdpa_fused_prefill(q, k, v, scale, is_causal):
     qkt_scratch = torch.empty((Hq, Mq, Mk), dtype=torch.float32, device=q.device)
     attn_scratch = torch.empty((Hq, Mq, Mk), dtype=q.dtype, device=q.device)
     out = torch.empty((B, Hq, Mq, D), dtype=q.dtype, device=q.device)
-    _attn_fused_prefill_host[(Hq,)](
+    _attn_fused_prefill_host[(n_rep, Hkv)](
         q.view(Hq, Mq, D), k.view(Hkv, Mk, D), v.view(Hkv, Mk, D),
         mask, scale_t,
         qkt_scratch.view(Hq * Mq * Mk), attn_scratch.view(Hq * Mq * Mk),
@@ -571,11 +590,11 @@ def scaled_dot_product_attention(
     scale=None,
     enable_gqa=False,
 ):
-    # Fast path: K3 vfwmacc GQA kernels (Qwen3 shape: D=128, f16, B=1, GQA)
+    # Fast path: K3 attention kernels (f16, B=1, GQA; smt.dot flash for Mq>1)
     B, Hq, Mq, D = query.shape
     _, Hkv, Mk, _ = key.shape
     if (query.dtype == torch.float16
-            and D == 128
+            and D in (64, 128)
             and B == 1
             and Hq % Hkv == 0
             and query.is_contiguous()
@@ -584,9 +603,11 @@ def scaled_dot_product_attention(
             and attn_mask is None
             and dropout_p == 0.0):
         sc = scale if scale is not None else (1.0 / math.sqrt(D))
-        if Mq == 1:
+        if Mq == 1 and D == 128:
             return _sdpa_m1_fused(query, key, value, sc, is_causal)
-        return _sdpa_fused_prefill(query, key, value, sc, is_causal)
+        return flash_attention(
+            query, key, value, is_causal=is_causal, scale=sc, enable_gqa=enable_gqa
+        )
     sc = scale if scale is not None else (1.0 / math.sqrt(D))
     return _sdpa_python_fallback(
         query, key, value, attn_mask, dropout_p, is_causal, sc
