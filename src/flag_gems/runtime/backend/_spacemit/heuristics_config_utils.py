@@ -70,14 +70,6 @@ def gather_heur_block_n(args):
     return min(2048, triton.next_power_of_2(args["N"]))
 
 
-def index_select_heur_block_m(args):
-    return min(4, triton.next_power_of_2(triton.cdiv(256, args["N"])))
-
-
-def index_select_heur_block_n(args):
-    m = min(triton.next_power_of_2(triton.cdiv(args["N"], 16)), 512)
-    return max(m, 16)
-
 
 def mm_heur_even_k(args):
     return args["K"] % args["BLOCK_SIZE_K"] == 0
@@ -264,10 +256,6 @@ HEURISTICS_CONFIGS = {
     "gather": {
         "BLOCK_M": gather_heur_block_m,
         "BLOCK_N": gather_heur_block_n,
-    },
-    "index_select": {
-        "BLOCK_M": index_select_heur_block_m,
-        "BLOCK_N": index_select_heur_block_n,
     },
     "mm": {
         "EVEN_K": mm_heur_even_k,

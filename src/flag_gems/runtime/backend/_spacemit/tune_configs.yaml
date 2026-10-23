@@ -157,9 +157,9 @@ addmm_spacemit:
     BLOCK_SIZE_M: 128
     BLOCK_SIZE_N: 256
     EVEN_K: 1
-    MICRO_M: 8
+    MICRO_M: 16
     MICRO_N: 32
-    MICRO_K: 32
+    MICRO_K: 8
 addmm:
   - META:
       BLOCK_SIZE_M: 64
@@ -486,14 +486,25 @@ triu:
 - gen: true
   param_map:
     META:
-      M_BLOCK_SIZE: 1
-      N_BLOCK_SIZE: 2048
+      M_BLOCK_SIZE: block_m
+      N_BLOCK_SIZE: block_n
+  block_m:
+  - 8
+  block_n:
+  - 256
 triu_batch:
 - gen: true
   param_map:
     META:
-      BATCH_BLOCK_SIZE: 1
-      MN_BLOCK_SIZE: 512
+      BATCH_BLOCK_SIZE: batch_block
+      M_BLOCK_SIZE: block_m
+      N_BLOCK_SIZE: block_n
+  batch_block:
+  - 1
+  block_m:
+  - 8
+  block_n:
+  - 128
 weight_norm_kernel_last:
 - gen: true
   param_map:
@@ -631,7 +642,331 @@ naive_reduction:
       BLOCK_N: block_n
   block_m:
   - 2
-  - 4
-  - 8
   block_n:
-  - 1024
+  - 512
+abs:
+- gen: true
+  param_map:
+    META:
+      BLOCK_SIZE: block_size
+  block_size:
+  - 512
+add_scalar_tensor:
+- gen: true
+  param_map:
+    META:
+      BLOCK_SIZE: block_size
+  block_size:
+  - 512
+add_tensor_scalar:
+- gen: true
+  param_map:
+    META:
+      BLOCK_SIZE: block_size
+  block_size:
+  - 512
+add_tensor_tensor:
+- gen: true
+  param_map:
+    META:
+      BLOCK_SIZE: block_size
+  block_size:
+  - 512
+bitwise_and_tensor_scalar:
+- gen: true
+  param_map:
+    META:
+      BLOCK_SIZE: block_size
+  block_size:
+  - 512
+bitwise_and_tensor_tensor:
+- gen: true
+  param_map:
+    META:
+      BLOCK_SIZE: block_size
+  block_size:
+  - 512
+bitwise_not:
+- gen: true
+  param_map:
+    META:
+      BLOCK_SIZE: block_size
+  block_size:
+  - 512
+bitwise_or_tensor_scalar:
+- gen: true
+  param_map:
+    META:
+      BLOCK_SIZE: block_size
+  block_size:
+  - 512
+bitwise_or_tensor_tensor:
+- gen: true
+  param_map:
+    META:
+      BLOCK_SIZE: block_size
+  block_size:
+  - 512
+cos:
+- gen: true
+  param_map:
+    META:
+      BLOCK_SIZE: block_size
+  block_size:
+  - 512
+div_scalar_tensor:
+- gen: true
+  param_map:
+    META:
+      BLOCK_SIZE: block_size
+  block_size:
+  - 512
+div_tensor_scalar:
+- gen: true
+  param_map:
+    META:
+      BLOCK_SIZE: block_size
+  block_size:
+  - 512
+div_tensor_tensor:
+- gen: true
+  param_map:
+    META:
+      BLOCK_SIZE: block_size
+  block_size:
+  - 512
+eq_tensor_scalar:
+- gen: true
+  param_map:
+    META:
+      BLOCK_SIZE: block_size
+  block_size:
+  - 512
+eq_tensor_tensor:
+- gen: true
+  param_map:
+    META:
+      BLOCK_SIZE: block_size
+  block_size:
+  - 512
+erf:
+- gen: true
+  param_map:
+    META:
+      BLOCK_SIZE: block_size
+  block_size:
+  - 512
+exp:
+- gen: true
+  param_map:
+    META:
+      BLOCK_SIZE: block_size
+  block_size:
+  - 512
+gelu_none_backward:
+- gen: true
+  param_map:
+    META:
+      BLOCK_SIZE: block_size
+  block_size:
+  - 512
+gelu_none_forward:
+- gen: true
+  param_map:
+    META:
+      BLOCK_SIZE: block_size
+  block_size:
+  - 512
+gelu_tanh_backward:
+- gen: true
+  param_map:
+    META:
+      BLOCK_SIZE: block_size
+  block_size:
+  - 512
+gelu_tanh_forward:
+- gen: true
+  param_map:
+    META:
+      BLOCK_SIZE: block_size
+  block_size:
+  - 512
+ge_tensor_scalar:
+- gen: true
+  param_map:
+    META:
+      BLOCK_SIZE: block_size
+  block_size:
+  - 512
+ge_tensor_tensor:
+- gen: true
+  param_map:
+    META:
+      BLOCK_SIZE: block_size
+  block_size:
+  - 512
+gt_tensor_scalar:
+- gen: true
+  param_map:
+    META:
+      BLOCK_SIZE: block_size
+  block_size:
+  - 512
+gt_tensor_tensor:
+- gen: true
+  param_map:
+    META:
+      BLOCK_SIZE: block_size
+  block_size:
+  - 512
+le_tensor_scalar:
+- gen: true
+  param_map:
+    META:
+      BLOCK_SIZE: block_size
+  block_size:
+  - 512
+le_tensor_tensor:
+- gen: true
+  param_map:
+    META:
+      BLOCK_SIZE: block_size
+  block_size:
+  - 512
+log_softmax_spacemit:
+- META:
+    ROW_SIZE: 1
+    COL_SIZE: 256
+lt_tensor_scalar:
+- gen: true
+  param_map:
+    META:
+      BLOCK_SIZE: block_size
+  block_size:
+  - 512
+lt_tensor_tensor:
+- gen: true
+  param_map:
+    META:
+      BLOCK_SIZE: block_size
+  block_size:
+  - 512
+mean_spacemit_v1:
+- gen: true
+  param_map:
+    META:
+      BLOCK_M: block_m
+      BLOCK_N: block_n
+  block_m:
+  - 1
+  block_n:
+  - 256
+mul_tensor_scalar:
+- gen: true
+  param_map:
+    META:
+      BLOCK_SIZE: block_size
+  block_size:
+  - 512
+mul_tensor_tensor:
+- gen: true
+  param_map:
+    META:
+      BLOCK_SIZE: block_size
+  block_size:
+  - 512
+relu_backward:
+- gen: true
+  param_map:
+    META:
+      BLOCK_SIZE: block_size
+  block_size:
+  - 512
+relu_forward:
+- gen: true
+  param_map:
+    META:
+      BLOCK_SIZE: block_size
+  block_size:
+  - 512
+rsqrt:
+- gen: true
+  param_map:
+    META:
+      BLOCK_SIZE: block_size
+  block_size:
+  - 512
+sigmoid_backward:
+- gen: true
+  param_map:
+    META:
+      BLOCK_SIZE: block_size
+  block_size:
+  - 512
+sigmoid_forward:
+- gen: true
+  param_map:
+    META:
+      BLOCK_SIZE: block_size
+  block_size:
+  - 512
+silu_backward:
+- gen: true
+  param_map:
+    META:
+      BLOCK_SIZE: block_size
+  block_size:
+  - 512
+silu_forward:
+- gen: true
+  param_map:
+    META:
+      BLOCK_SIZE: block_size
+  block_size:
+  - 512
+sin:
+- gen: true
+  param_map:
+    META:
+      BLOCK_SIZE: block_size
+  block_size:
+  - 512
+softmax_spacemit:
+- META:
+    ROW_SIZE: 1
+    COL_SIZE: 512
+sub_scalar_tensor:
+- gen: true
+  param_map:
+    META:
+      BLOCK_SIZE: block_size
+  block_size:
+  - 512
+sub_tensor_scalar:
+- gen: true
+  param_map:
+    META:
+      BLOCK_SIZE: block_size
+  block_size:
+  - 512
+sub_tensor_tensor:
+- gen: true
+  param_map:
+    META:
+      BLOCK_SIZE: block_size
+  block_size:
+  - 512
+tanh_backward:
+- gen: true
+  param_map:
+    META:
+      BLOCK_SIZE: block_size
+  block_size:
+  - 512
+tanh_forward:
+- gen: true
+  param_map:
+    META:
+      BLOCK_SIZE: block_size
+  block_size:
+  - 512
