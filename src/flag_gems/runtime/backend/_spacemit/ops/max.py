@@ -12,6 +12,9 @@ from flag_gems.utils import dim_compress, libentry
 from flag_gems.utils import triton_lang_extension as tle
 from flag_gems.utils.limits import get_dtype_min
 
+from ._rvisa import HAS_SMT_RVISA, _sr_call, f16, f32, smt_rvisa_enabled
+from ._rvisa import tle as srv
+
 import os
 
 try:
@@ -202,6 +205,106 @@ def max(inp):
     return out
 
 
+if HAS_SMT_RVISA:
+
+    # sentinel for "not the argmax lane" in the f32 index scratch; any value
+    # larger than any real index works (real indices are < 2**24, exact in f32)
+    _RVISA_INF_IDX = 1.0e30
+
+    @srv.raw_kernel
+    def _max_dim1_rvisa_f32(
+        X: srv.mem(f32),
+        vals: srv.mem(f32, out=True),
+        idxs: srv.mem(f32, out=True),
+        N: srv.index,
+        row_base: srv.index,
+        row_end: srv.index,
+    ):
+        # streaming-VL argmax: running select-based (value, index) pair per
+        # lane, one horizontal vreduce_max + vreduce_min at the end; 5.0-9.2x
+        # over max_kernel at f32 (K3 raw_vs_ops bench, 2026-10-23). Ported
+        # from spine-triton python/tests/raw/test_raw_max_dim.py with the mv
+        # svector row-block host (BLOCK rows per program keeps the grid within
+        # the 512 programs the runtime executes).
+        nvl = srv.vconfig(-1, 1)
+        Nfloor = (N // nvl) * nvl
+        lane = srv.viota()
+        for row in srv.range(row_base, row_end, 1):
+            base = row * N
+            best_val = srv.vload(X, base, dtype=f32)
+            best_idx = lane
+            for i in srv.range(0, Nfloor, nvl):
+                vx = srv.vload(X, base + i, dtype=f32)
+                idx = lane + srv.cast(i, f32)
+                gt = vx > best_val
+                best_val = srv.select(gt, vx, best_val)
+                best_idx = srv.select(gt, idx, best_idx)
+            for i in srv.range(Nfloor, N, nvl):
+                srv.vconfig(N - i, 1)
+                tx = srv.vload(X, base + i, dtype=f32, fill=-1e38)
+                tidx = lane + srv.cast(i, f32)
+                gt2 = tx > best_val
+                best_val = srv.select(gt2, tx, best_val)
+                best_idx = srv.select(gt2, tidx, best_idx)
+            gmax = srv.vreduce_max(best_val)
+            is_max = best_val >= gmax
+            big = srv.vzero(f32) + _RVISA_INF_IDX
+            masked = srv.select(is_max, best_idx, big)
+            argmax = srv.vreduce_min(masked)
+            srv.sstore(vals, row, gmax)
+            srv.sstore(idxs, row, argmax)
+
+    @srv.raw_kernel
+    def _max_dim1_rvisa_f16(
+        X: srv.mem(f16),
+        vals: srv.mem(f32, out=True),
+        idxs: srv.mem(f32, out=True),
+        N: srv.index,
+        row_base: srv.index,
+        row_end: srv.index,
+    ):
+        nvl = srv.vconfig(-1, 1)
+        Nfloor = (N // nvl) * nvl
+        lane = srv.viota()
+        for row in srv.range(row_base, row_end, 1):
+            base = row * N
+            # widen to f32 for the compare (fp16 compare-with-index lowers
+            # badly on this stack; the widening is lossless)
+            best_val = srv.cast(srv.vload(X, base), f32)
+            best_idx = lane
+            for i in srv.range(0, Nfloor, nvl):
+                vx = srv.cast(srv.vload(X, base + i), f32)
+                idx = lane + srv.cast(i, f32)
+                gt = vx > best_val
+                best_val = srv.select(gt, vx, best_val)
+                best_idx = srv.select(gt, idx, best_idx)
+            # -65504 = lowest finite f16, so padded lanes can never win the max
+            for i in srv.range(Nfloor, N, nvl):
+                srv.vconfig(N - i, 1)
+                tx = srv.cast(srv.vload(X, base + i, fill=-65504.0), f32)
+                tidx = lane + srv.cast(i, f32)
+                gt2 = tx > best_val
+                best_val = srv.select(gt2, tx, best_val)
+                best_idx = srv.select(gt2, tidx, best_idx)
+            gmax = srv.vreduce_max(best_val)
+            is_max = best_val >= gmax
+            big = srv.vzero(f32) + _RVISA_INF_IDX
+            masked = srv.select(is_max, best_idx, big)
+            argmax = srv.vreduce_min(masked)
+            srv.sstore(vals, row, gmax)
+            srv.sstore(idxs, row, argmax)
+
+    @triton.jit(do_not_specialize=["M", "N"])
+    def _max_dim1_rvisa_host(X, vals, idxs, M, N, BLOCK: tl.constexpr, F16: tl.constexpr):
+        pid = tl.program_id(0)
+        row_base = pid * BLOCK
+        row_end = min(row_base + BLOCK, M)
+        if F16:
+            _sr_call(_max_dim1_rvisa_f16, outputs=[], inputs=[X, vals, idxs, N, row_base, row_end])
+        else:
+            _sr_call(_max_dim1_rvisa_f32, outputs=[], inputs=[X, vals, idxs, N, row_base, row_end])
+
+
 def max_dim(inp, dim=None, keepdim=False):
     logger.debug("GEMS_SPACEMIT MAX DIM")
     assert dim >= -inp.ndim and dim < inp.ndim, "Invalid dim"
@@ -219,9 +322,30 @@ def max_dim(inp, dim=None, keepdim=False):
         out_value = torch.squeeze(out_value, dim)
         out_index = torch.squeeze(out_index, dim)
 
-    grid = lambda meta: (triton.cdiv(M, meta["BLOCK_M"]),)
-    with torch_device_fn.device(inp.device):
-        max_kernel[grid](inp, out_value, out_index, M, N)
+    # the streaming kernel seeds its max with one full first tile, so it needs
+    # N >= 64 (the widest VLMAX) to not read into the next row
+    if (
+        smt_rvisa_enabled()
+        and inp.dtype in (torch.float16, torch.float32)
+        and M > 0
+        and N >= 64
+    ):
+        inp = inp.contiguous()
+        vals = torch.empty(M, dtype=torch.float32, device=inp.device)
+        idxs = torch.empty(M, dtype=torch.float32, device=inp.device)
+        block = builtins.max(1, triton.cdiv(M, 512))
+        with torch_device_fn.device(inp.device):
+            _max_dim1_rvisa_host[(triton.cdiv(M, block),)](
+                inp, vals, idxs, M, N, BLOCK=block, F16=inp.dtype == torch.float16
+            )
+        # outs still carry the reduced dim as 1 (the squeeze happens in the
+        # caller); reshape so copy_ does not try to broadcast
+        out_value.copy_(vals.reshape(out_value.shape))
+        out_index.copy_(idxs.round().to(torch.int64).reshape(out_index.shape))
+    else:
+        grid = lambda meta: (triton.cdiv(M, meta["BLOCK_M"]),)
+        with torch_device_fn.device(inp.device):
+            max_kernel[grid](inp, out_value, out_index, M, N)
     Max_out = namedtuple("max", ["values", "indices"])
     out = Max_out(values=out_value, indices=out_index)
     return out

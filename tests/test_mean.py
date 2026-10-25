@@ -90,3 +90,29 @@ def test_mean_dim_large_innerdim(shape, dim, keepdim, dtype):
         res_out = torch.mean(inp, dim, keepdim)
 
     utils.gems_assert_close(res_out, ref_out, dtype)
+
+# smt_rvisa eDSL switch path (SPACEMIT_SMT_RVISA=1): streaming-VL row
+# reduce, present only in the spacemit vendor backend; on other backends the
+# env var is inert and this exercises the regular path. Shapes cover the
+# row-block host (M > 512 keeps the grid within 512 programs) and the
+# narrowed-tail path (N not a multiple of 64).
+SMT_RVISA_SHAPES = [
+    (64, 1024),
+    (600, 100),
+    (512, 4096),
+]
+
+
+@pytest.mark.mean_dim
+@pytest.mark.parametrize("shape", SMT_RVISA_SHAPES)
+@pytest.mark.parametrize("dtype", [torch.float16, torch.float32])
+def test_mean_dim_smt_rvisa(shape, dtype, monkeypatch):
+    monkeypatch.setenv("SPACEMIT_SMT_RVISA", "1")
+    inp = torch.randn(shape, dtype=dtype, device=flag_gems.device)
+    ref_inp = utils.to_reference(inp, True)
+
+    ref_out = torch.mean(ref_inp, [1])
+    with flag_gems.use_gems():
+        res_out = torch.mean(inp, [1])
+
+    utils.gems_assert_close(res_out, ref_out, dtype)

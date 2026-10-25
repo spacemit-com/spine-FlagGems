@@ -52,6 +52,7 @@ try:
 except ImportError:
     pass
 from .mul import mul, mul_
+from .mv import mv
 from .relu import relu, relu_
 from .rsqrt import rsqrt
 from .sigmoid import sigmoid
@@ -121,6 +122,7 @@ __all__ = [
     "mm_out",
     "mul",
     "mul_",
+    "mv",
     "relu",
     "relu_",
     "rsqrt",

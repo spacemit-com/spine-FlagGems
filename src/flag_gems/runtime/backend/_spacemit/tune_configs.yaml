@@ -1,3 +1,10 @@
+# Feature switch for the smt_rvisa eDSL kernels (mean/max/sum/softmax/
+# log_softmax/mv); the default lives here and SPACEMIT_SMT_RVISA=1/0
+# overrides it per process. Shaped like a config list because the loader
+# wraps every top-level key in triton.Config.
+spacemit_rvisa:
+  - META:
+      enabled: false
 attention:
   # Single pinned config for the K3/QEMU backend: the generated 3x3x2x2x3
   # enumeration plus the code-appended SMALL_HEAD_DIM_CONFIGS (BLOCK_N=16)

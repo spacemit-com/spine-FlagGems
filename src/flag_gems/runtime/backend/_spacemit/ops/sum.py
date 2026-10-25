@@ -12,6 +12,9 @@ from flag_gems.runtime import torch_device_fn
 from flag_gems.utils import dim_compress, libentry
 from flag_gems.utils import triton_lang_extension as tle
 
+from ._rvisa import HAS_SMT_RVISA, _sr_call, f16, f32, smt_rvisa_enabled
+from ._rvisa import tle as srv
+
 import os
 
 try:
@@ -394,16 +397,37 @@ def sum_dim_comm(inp, dim=None, keepdim=False, *, dtype=None, out=None):
                     K,
                 )
             else:
-                # one program per row; this stack's runtime dispatches large
-                # grids fine (per-row single-tile loads benchmarked faster
-                # than re-blocking through sum_dim_kernel)
-                grid = (M, 1, 1)
-                sum_dim_kernel_inner[grid](
-                    out,
-                    inp,
-                    M,
-                    N,
-                )
+                if (
+                    smt_rvisa_enabled()
+                    and inp.dtype in (torch.float16, torch.float32)
+                    and M > 0
+                    and N > 0
+                ):
+                    scratch = torch.empty(M, dtype=torch.float32, device=inp.device)
+                    block = builtins.max(1, triton.cdiv(M, 512))
+                    with torch_device_fn.device(inp.device):
+                        _sum_dim1_rvisa_host[(triton.cdiv(M, block),)](
+                            inp,
+                            scratch,
+                            M,
+                            N,
+                            BLOCK=block,
+                            F16=inp.dtype == torch.float16,
+                        )
+                    # out still carries the reduced dim as 1 (the squeeze happens
+                    # below); reshape so copy_ does not try to broadcast
+                    out.copy_(scratch.reshape(out.shape))
+                else:
+                    # one program per row; this stack's runtime dispatches large
+                    # grids fine (per-row single-tile loads benchmarked faster
+                    # than re-blocking through sum_dim_kernel)
+                    grid = (M, 1, 1)
+                    sum_dim_kernel_inner[grid](
+                        out,
+                        inp,
+                        M,
+                        N,
+                    )
         if not keepdim and not _out_provided:
             out = out.squeeze(dim=dim)
         return out
@@ -431,6 +455,70 @@ def sum_dim_comm(inp, dim=None, keepdim=False, *, dtype=None, out=None):
             for d in sorted(dim, reverse=True):
                 out = out.squeeze(dim=d)
         return out
+
+
+if HAS_SMT_RVISA:
+
+    @srv.raw_kernel
+    def _sum_dim1_rvisa_f32(
+        X: srv.mem(f32),
+        out: srv.mem(f32, out=True),
+        N: srv.index,
+        row_base: srv.index,
+        row_end: srv.index,
+    ):
+        # streaming-VL row reduce: whole rows accumulated in registers with
+        # one horizontal vreduce at the end; also sidesteps the ptr.to_ptr
+        # compile failure of sum_dim_kernel_inner on stacks whose spine-opt
+        # lacks MemorySpaceAttrInterface. Ported from spine-triton
+        # python/tests/raw/test_raw_sum.py with the mv svector row-block host
+        # (BLOCK rows per program keeps the grid within the 512 programs the
+        # runtime executes).
+        nvl = srv.vconfig(-1, 1)
+        Nfloor = (N // nvl) * nvl
+        for row in srv.range(row_base, row_end, 1):
+            base = row * N
+            acc = srv.vzero(f32)
+            for i in srv.range(0, Nfloor, nvl):
+                vx = srv.vload(X, base + i, dtype=f32)
+                acc = acc + vx
+            for i in srv.range(Nfloor, N, nvl):
+                srv.vconfig(N - i, 1)
+                tx = srv.vload(X, base + i, dtype=f32)
+                acc = acc + tx
+            srv.sstore(out, row, srv.vreduce_sum(acc))
+
+    @srv.raw_kernel
+    def _sum_dim1_rvisa_f16(
+        X: srv.mem(f16),
+        out: srv.mem(f32, out=True),
+        N: srv.index,
+        row_base: srv.index,
+        row_end: srv.index,
+    ):
+        nvl = srv.vconfig(-1, 1)
+        Nfloor = (N // nvl) * nvl
+        for row in srv.range(row_base, row_end, 1):
+            base = row * N
+            acc = srv.vzero(f32)
+            for i in srv.range(0, Nfloor, nvl):
+                vx = srv.vload(X, base + i)  # default dtype=f16
+                acc = acc + srv.cast(vx, f32)
+            for i in srv.range(Nfloor, N, nvl):
+                srv.vconfig(N - i, 1)
+                tx = srv.vload(X, base + i)
+                acc = acc + srv.cast(tx, f32)
+            srv.sstore(out, row, srv.vreduce_sum(acc))
+
+    @triton.jit(do_not_specialize=["M", "N"])
+    def _sum_dim1_rvisa_host(X, out, M, N, BLOCK: tl.constexpr, F16: tl.constexpr):
+        pid = tl.program_id(0)
+        row_base = pid * BLOCK
+        row_end = min(row_base + BLOCK, M)
+        if F16:
+            _sr_call(_sum_dim1_rvisa_f16, outputs=[], inputs=[X, out, N, row_base, row_end])
+        else:
+            _sr_call(_sum_dim1_rvisa_f32, outputs=[], inputs=[X, out, N, row_base, row_end])
 
 
 def sum_dim(inp, dim=None, keepdim=False, *, dtype=None):

@@ -8,6 +8,9 @@ from flag_gems.runtime import torch_device_fn
 from flag_gems.utils import dim_compress, libentry
 from flag_gems.utils import triton_lang_extension as tle
 
+from ._rvisa import HAS_SMT_RVISA, _sr_call, f16, f32, smt_rvisa_enabled
+from ._rvisa import tle as srv
+
 
 @libentry()
 @triton.jit
@@ -140,6 +143,82 @@ def mean_dim_kernel(X, Mean, M, N, BLOCK_M: tl.constexpr, BLOCK_N: tl.constexpr)
     tl.store(mean_ptr_desc, mean.to(Mean.dtype.element_ty), boundary_check=[0])
 
 
+if HAS_SMT_RVISA:
+
+    @srv.raw_kernel
+    def _mean_dim1_rvisa_f32(
+        X: srv.mem(f32),
+        out: srv.mem(f32, out=True),
+        N: srv.index,
+        row_base: srv.index,
+        row_end: srv.index,
+    ):
+        # streaming-VL row reduce: accumulate whole rows in registers with one
+        # horizontal vreduce at the end, instead of a [BLOCK_M, BLOCK_N] tile
+        # accumulator; 3.6-7.0x over mean_dim_kernel at f32 (K3 raw_vs_ops
+        # bench, 2026-10-23). Ported from spine-triton
+        # python/tests/raw/test_raw_mean_dim.py with the mv svector row-block
+        # host (BLOCK rows per program keeps the grid within the 512 programs
+        # the runtime executes).
+        nvl = srv.vconfig(-1, 1)
+        Nfloor = (N // nvl) * nvl
+        for row in srv.range(row_base, row_end, 1):
+            base = row * N
+            acc = srv.vzero(f32)
+            for i in srv.range(0, Nfloor, nvl):
+                vx = srv.vload(X, base + i, dtype=f32)
+                acc = acc + vx
+            for i in srv.range(Nfloor, N, nvl):
+                srv.vconfig(N - i, 1)
+                tx = srv.vload(X, base + i, dtype=f32)
+                acc = acc + tx
+            srv.sstore(out, row, srv.vreduce_sum(acc) / N)
+
+    @srv.raw_kernel
+    def _mean_dim1_rvisa_f16(
+        X: srv.mem(f16),
+        out: srv.mem(f32, out=True),
+        N: srv.index,
+        row_base: srv.index,
+        row_end: srv.index,
+    ):
+        nvl = srv.vconfig(-1, 1)
+        Nfloor = (N // nvl) * nvl
+        for row in srv.range(row_base, row_end, 1):
+            base = row * N
+            acc = srv.vzero(f32)
+            for i in srv.range(0, Nfloor, nvl):
+                vx = srv.vload(X, base + i)  # default dtype=f16
+                acc = acc + srv.cast(vx, f32)
+            for i in srv.range(Nfloor, N, nvl):
+                srv.vconfig(N - i, 1)
+                tx = srv.vload(X, base + i)
+                acc = acc + srv.cast(tx, f32)
+            srv.sstore(out, row, srv.vreduce_sum(acc) / N)
+
+    @triton.jit(do_not_specialize=["M", "N"])
+    def _mean_dim1_rvisa_host(X, out, M, N, BLOCK: tl.constexpr, F16: tl.constexpr):
+        pid = tl.program_id(0)
+        row_base = pid * BLOCK
+        row_end = min(row_base + BLOCK, M)
+        if F16:
+            _sr_call(_mean_dim1_rvisa_f16, outputs=[], inputs=[X, out, N, row_base, row_end])
+        else:
+            _sr_call(_mean_dim1_rvisa_f32, outputs=[], inputs=[X, out, N, row_base, row_end])
+
+    def _mean_dim_rvisa(x, out, M, N):
+        x = x.contiguous()
+        scratch = torch.empty(M, dtype=torch.float32, device=x.device)
+        block = max(1, triton.cdiv(M, 512))
+        with torch_device_fn.device(x.device):
+            _mean_dim1_rvisa_host[(triton.cdiv(M, block),)](
+                x, scratch, M, N, BLOCK=block, F16=x.dtype == torch.float16
+            )
+        # out still carries the reduced dim as 1 (the squeeze happens in the
+        # caller); reshape so copy_ does not try to broadcast
+        out.copy_(scratch.reshape(out.shape))
+
+
 def mean_dim(x, dim, keepdim=False, *, dtype=None):
     logging.debug("GEMS_SPACEMIT MEAN_DIM")
 
@@ -160,9 +239,17 @@ def mean_dim(x, dim, keepdim=False, *, dtype=None):
         shape[i] = 1
     M = x.numel() // N
     out = torch.empty(shape, dtype=dtype, device=x.device)
-    grid = lambda META: (triton.cdiv(M, META["BLOCK_M"]),)
-    with torch_device_fn.device(x.device):
-        mean_dim_kernel[grid](x, out, M, N)
+    if (
+        smt_rvisa_enabled()
+        and x.dtype in (torch.float16, torch.float32)
+        and M > 0
+        and N > 0
+    ):
+        _mean_dim_rvisa(x, out, M, N)
+    else:
+        grid = lambda META: (triton.cdiv(M, META["BLOCK_M"]),)
+        with torch_device_fn.device(x.device):
+            mean_dim_kernel[grid](x, out, M, N)
     if not keepdim:
         out = out.squeeze(dim)
     return out

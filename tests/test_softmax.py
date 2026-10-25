@@ -136,3 +136,30 @@ def test_softmax_backward(shape, dtype, dim, neg_inf):
     utils.gems_assert_close(
         res_in_grad, ref_in_grad, dtype, reduce_dim=shape[dim], equal_nan=True
     )
+
+# smt_rvisa eDSL switch path (SPACEMIT_SMT_RVISA=1): three-pass
+# in-register softmax, present only in the spacemit vendor backend; on other
+# backends the env var is inert and this exercises the regular path. Shapes
+# cover the row-block host (n_rows > 512), the narrowed-tail path (n_cols not
+# a multiple of 64) and the large-n_cols regime where the regular two-pass
+# online path collapses.
+SMT_RVISA_SHAPES = [
+    (64, 1024),
+    (600, 100),
+    (4, 16384),
+]
+
+
+@pytest.mark.softmax
+@pytest.mark.parametrize("shape", SMT_RVISA_SHAPES)
+@pytest.mark.parametrize("dtype", [torch.float16, torch.float32])
+def test_softmax_smt_rvisa(shape, dtype, monkeypatch):
+    monkeypatch.setenv("SPACEMIT_SMT_RVISA", "1")
+    inp = torch.randn(shape, dtype=dtype, device=flag_gems.device)
+    ref_inp = utils.to_reference(inp, True)
+
+    ref_out = torch.nn.functional.softmax(ref_inp, dim=-1)
+    with flag_gems.use_gems():
+        res_out = torch.nn.functional.softmax(inp, dim=-1)
+
+    utils.gems_assert_close(res_out, ref_out, dtype)
